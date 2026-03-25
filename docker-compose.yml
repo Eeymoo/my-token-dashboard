@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ai-token-dashboard-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DATABASE_NAME:-ai_token_dashboard}
+      MYSQL_USER: ${DATABASE_USER:-username}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-password}
+    ports:
+      - "${DATABASE_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    networks:
+      - ai-token-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-token-dashboard-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_NAME: ${DATABASE_NAME:-ai_token_dashboard}
+      DATABASE_USER: ${DATABASE_USER:-username}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-password}
+      NEW_API_BASE_URL: ${NEW_API_BASE_URL:-https://new-api.onemue.cn/}
+      NEW_API_KEY: ${NEW_API_KEY:-xmCgDsePJkpnrhsFmbp2SnqhiS8i}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-default-admin-key}
+      SYNC_INTERVAL_HOURS: ${SYNC_INTERVAL_HOURS:-1}
+      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-AI Token 看板}
+      NEXT_PUBLIC_DEFAULT_CURRENCY: ${NEXT_PUBLIC_DEFAULT_CURRENCY:-USD}
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ai-token-network
+
+volumes:
+  mysql_data:
+
+networks:
+  ai-token-network:
+    driver: bridge

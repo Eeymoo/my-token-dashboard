@@ -1,0 +1,153 @@
+import axios from 'axios'
+import type { LogQueryParams, LogQueryResponse } from '@/types/api'
+
+// 创建 axios 实例
+const apiClient = axios.create({
+  baseURL: process.env.NEW_API_BASE_URL || 'https://new-api.onemue.cn/',
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${process.env.NEW_API_KEY || 'xmCgDsePJkpnrhsFmbp2SnqhiS8i'}`,
+  },
+})
+
+// 请求拦截器
+apiClient.interceptors.request.use(
+  (config) => {
+    // 可以在这里添加请求日志
+    console.log(`🚀 请求: ${config.method?.toUpperCase()} ${config.url}`)
+    return config
+  },
+  (error) => {
+    console.error('❌ 请求错误:', error)
+    return Promise.reject(error)
+  }
+)
+
+// 响应拦截器
+apiClient.interceptors.response.use(
+  (response) => {
+    console.log(`✅ 响应: ${response.status} ${response.config.url}`)
+    return response
+  },
+  (error) => {
+    console.error('❌ 响应错误:', {
+      url: error.config?.url,
+      status: error.response?.status,
+      message: error.message,
+    })
+    return Promise.reject(error)
+  }
+)
+
+// 获取日志数据
+export async function fetchLogs(params: LogQueryParams): Promise<LogQueryResponse> {
+  try {
+    // 根据 New API 文档，日志查询端点是 GET /api/log/
+    // 但实际需要根据 API 文档调整
+    const response = await apiClient.get('/api/log/', {
+      params: {
+        p: params.page || 1,
+        page_size: params.pageSize || 100,
+        // 其他参数根据 API 文档调整
+      },
+    })
+
+    // 这里需要根据实际 API 响应格式转换
+    // 假设响应格式如下：
+    // {
+    //   success: true,
+    //   data: {
+    //     logs: [...],
+    //     pagination: {...}
+    //   }
+    // }
+    return response.data
+  } catch (error) {
+    console.error('获取日志数据失败:', error)
+    throw error
+  }
+}
+
+// 获取模型列表
+export async function fetchModels() {
+  try {
+    // 这里需要根据 API 文档确定获取模型列表的端点
+    // 假设没有专门的模型列表接口，从日志中提取
+    const response = await apiClient.get('/api/log/', {
+      params: {
+        page_size: 1, // 只取一条来获取模型信息
+      },
+    })
+
+    // 从日志中提取模型信息（示例逻辑）
+    // 实际应根据 API 响应调整
+    const models = [
+      { modelId: 'gpt-4', modelName: 'GPT-4', provider: 'OpenAI', category: 'text' },
+      { modelId: 'claude-3', modelName: 'Claude 3', provider: 'Anthropic', category: 'text' },
+      { modelId: 'gemini-pro', modelName: 'Gemini Pro', provider: 'Google', category: 'text' },
+      { modelId: 'llama-2', modelName: 'Llama 2', provider: 'Meta', category: 'text' },
+      { modelId: 'dall-e-3', modelName: 'DALL-E 3', provider: 'OpenAI', category: 'image' },
+    ]
+
+    return {
+      success: true,
+      data: models,
+    }
+  } catch (error) {
+    console.error('获取模型列表失败:', error)
+    throw error
+  }
+}
+
+// 获取汇总数据
+export async function fetchSummary(startDate: string, endDate: string, models?: string[]) {
+  try {
+    // 根据 API 文档调整
+    const response = await apiClient.get('/api/log/', {
+      params: {
+        start_date: startDate,
+        end_date: endDate,
+        models: models?.join(','),
+        page_size: 1000, // 获取足够的数据进行聚合
+      },
+    })
+
+    // 这里需要根据实际响应进行数据聚合
+    // 暂时返回模拟数据
+    return {
+      success: true,
+      data: {
+        totalTokens: 1234567,
+        totalCost: 1234.56,
+        totalRequests: 12345,
+        modelBreakdown: [
+          { modelId: 'gpt-4', modelName: 'GPT-4', totalTokens: 500000, totalCost: 500.0, requestCount: 5000 },
+          { modelId: 'claude-3', modelName: 'Claude 3', totalTokens: 400000, totalCost: 400.0, requestCount: 4000 },
+          { modelId: 'gemini-pro', modelName: 'Gemini Pro', totalTokens: 300000, totalCost: 300.0, requestCount: 3000 },
+        ],
+      },
+    }
+  } catch (error) {
+    console.error('获取汇总数据失败:', error)
+    throw error
+  }
+}
+
+// 测试 API 连接
+export async function testApiConnection() {
+  try {
+    const response = await apiClient.get('/api/log/', {
+      params: {
+        page_size: 1,
+      },
+    })
+    console.log('✅ API 连接成功:', response.status)
+    return { success: true, status: response.status }
+  } catch (error: any) {
+    console.error('❌ API 连接失败:', error.message)
+    return { success: false, error: error.message }
+  }
+}
+
+export default apiClient

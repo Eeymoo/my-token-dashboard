@@ -1,0 +1,285 @@
+# AI Token 看板
+
+基于 New API 平台的 Token 使用情况统计和管理 Dashboard，包含完整的前后端和数据库。
+
+## ✨ 功能特性
+
+- 📊 **全局筛选器**: 模型选择、时间范围选择（快捷选项+自定义）
+- 🎯 **总览卡片**: 总 Token 消耗、总花费、总请求数 KPI 展示
+- 📈 **时间趋势分析**: 折线图展示分时/累计数据，支持多指标切换
+- 🧩 **分模型使用量分析**: 堆叠面积图展示各模型使用情况
+- 🔄 **实时数据**: 定时同步（每小时一次），手动刷新按钮
+- 🗃️ **数据库存储**: MySQL 数据库存储历史数据
+- 🌙 **暗色模式**: 支持亮色/暗色主题切换
+- 📱 **响应式设计**: 适配桌面端和移动端
+
+## 🏗️ 技术架构
+
+### 前端
+- **框架**: Next.js 14 (App Router)
+- **语言**: TypeScript
+- **样式**: Tailwind CSS
+- **UI组件**: Ant Design (antd)
+- **图表**: Recharts
+- **状态管理**: React Query + React State
+
+### 后端
+- **API 代理**: Next.js API Routes
+- **数据库**: MySQL + mysql2
+- **定时任务**: node-cron (每小时同步)
+- **HTTP客户端**: Axios
+
+### 数据流
+```
+New API → Next.js API代理 → MySQL数据库 → 前端Dashboard
+         (每小时同步)         (持久化存储)   (可视化展示)
+```
+
+## 🚀 快速开始
+
+### 1. 环境准备
+
+```bash
+# 复制环境变量配置
+cp .env.example .env.local
+
+# 编辑 .env.local 文件，配置您的 API 信息和数据库
+```
+
+### 2. 安装依赖
+
+```bash
+npm install
+```
+
+### 3. 配置数据库
+
+确保 MySQL 服务正在运行，然后创建数据库：
+
+```sql
+CREATE DATABASE ai_token_dashboard CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+### 4. 运行开发服务器
+
+```bash
+npm run dev
+```
+
+访问 [http://localhost:3000](http://localhost:3000) 查看应用。
+
+### 5. 初始化系统
+
+访问 [http://localhost:3000/api/init](http://localhost:3000/api/init) 初始化数据库和启动定时同步。
+
+### 6. 构建生产版本
+
+```bash
+npm run build
+npm start
+```
+
+## ⚙️ 环境变量配置
+
+### 必需配置
+```env
+# New API 配置
+NEW_API_BASE_URL=https://new-api.onemue.cn/
+NEW_API_KEY=您的API密钥
+
+# 数据库配置
+DATABASE_HOST=localhost
+DATABASE_PORT=3306
+DATABASE_NAME=ai_token_dashboard
+DATABASE_USER=用户名
+DATABASE_PASSWORD=密码
+
+# 管理配置
+ADMIN_API_KEY=设置一个管理密钥
+```
+
+### 可选配置
+```env
+# 同步配置
+SYNC_INTERVAL_HOURS=1  # 同步间隔（小时）
+SYNC_ENABLED=true     # 是否启用同步
+
+# 应用配置
+NEXT_PUBLIC_APP_NAME="AI Token 看板"
+NEXT_PUBLIC_DEFAULT_CURRENCY=USD
+```
+
+## 📁 项目结构
+
+```
+src/
+├── app/                    # Next.js App Router
+│   ├── api/               # API 路由（后端代理）
+│   │   ├── logs/          # 日志查询
+│   │   ├── models/        # 模型列表
+│   │   ├── sync/          # 数据同步
+│   │   └── init/          # 系统初始化
+│   ├── layout.tsx         # 根布局
+│   ├── page.tsx           # 主页面
+│   └── globals.css        # 全局样式
+├── components/            # 业务组件（按需创建）
+├── hooks/                 # 自定义 Hooks
+│   └── useLogs.ts         # 数据查询 Hook
+├── lib/                   # 工具库
+│   ├── db.ts              # 数据库连接
+│   ├── api-client.ts      # New API 客户端
+│   └── sync.ts            # 数据同步器
+├── types/                 # TypeScript 类型定义
+│   └── api.ts             # API 类型定义
+└── utils/                 # 工具函数（预留）
+```
+
+## 🔧 核心功能实现
+
+### 数据同步机制
+- **定时同步**: 每小时自动从 New API 同步数据到本地数据库
+- **手动同步**: 支持手动触发同步
+- **增量同步**: 基于最后同步时间进行增量更新
+- **错误重试**: 同步失败时自动重试机制
+
+### 数据聚合
+- **按时间粒度**: 小时/天/周/月自动聚合
+- **按模型分组**: 支持多维度分析
+- **实时计算**: 前端实时计算累计数据
+
+### API 代理
+- **保护 API Key**: 通过后端代理保护 API 密钥
+- **数据转换**: 统一数据格式和错误处理
+- **缓存策略**: 合理的数据缓存减少重复请求
+
+## 🗄️ 数据库设计
+
+### 主要表结构
+1. **api_logs**: 原始 API 日志记录
+2. **models**: 模型信息表
+3. **aggregated_data**: 聚合数据表（按时间粒度）
+4. **sync_metadata**: 同步元数据表
+
+### 索引优化
+- 时间戳索引: 加速时间范围查询
+- 模型索引: 加速模型筛选
+- 组合索引: 支持复杂查询场景
+
+## 🐳 Docker 部署
+
+使用 Docker Compose 可以快速启动包含 MySQL 数据库的完整环境。
+
+### 1. 环境准备
+
+```bash
+# 复制 Docker 环境变量配置
+cp .env.docker.example .env
+# 编辑 .env 文件，根据实际情况修改配置
+```
+
+### 2. 启动服务
+
+```bash
+# 构建并启动所有服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+```
+
+### 3. 初始化数据库
+
+应用启动后，访问以下 URL 初始化数据库和启动定时同步：
+
+```
+http://localhost:3000/api/init
+```
+
+或者使用 curl 命令：
+
+```bash
+curl http://localhost:3000/api/init
+```
+
+### 4. 访问应用
+
+- 前端应用: http://localhost:3000
+- MySQL 数据库: localhost:3306 (用户名/密码见 .env 文件)
+
+### 5. 管理命令
+
+```bash
+# 停止服务
+docker-compose down
+
+# 停止服务并删除数据卷
+docker-compose down -v
+
+# 重启服务
+docker-compose restart
+
+# 查看服务状态
+docker-compose ps
+
+# 查看应用日志
+docker-compose logs app
+
+# 查看数据库日志
+docker-compose logs mysql
+```
+
+### 6. 更新应用
+
+```bash
+# 拉取最新代码后重新构建
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+## 🚢 部署
+
+### Vercel (推荐)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/your-repo/ai-token-dashboard)
+
+### 自托管
+1. 配置数据库连接
+2. 设置环境变量
+3. 构建并启动服务
+4. 访问 `/api/init` 初始化系统
+
+## 🐛 故障排除
+
+### 常见问题
+1. **数据库连接失败**
+   - 检查 MySQL 服务状态
+   - 验证数据库配置
+   - 检查网络连接
+
+2. **API 同步失败**
+   - 验证 API Key 是否正确
+   - 检查网络连接
+   - 查看服务器日志
+
+3. **前端数据不显示**
+   - 检查浏览器控制台错误
+   - 验证 API 路由是否正常
+   - 检查数据库是否有数据
+
+### 日志查看
+```bash
+# 查看 Next.js 服务器日志
+npm run dev  # 开发环境
+npm start    # 生产环境
+```
+
+## 📄 许可证
+
+MIT
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📞 支持
+
+如有问题，请查看 [New API 文档](https://docs.newapi.pro) 或提交 Issue。
