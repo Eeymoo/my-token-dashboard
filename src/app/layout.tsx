@@ -6,6 +6,7 @@ import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
+import QueryProvider from './QueryProvider'
 
 dayjs.locale('zh-cn')
 
@@ -24,15 +25,17 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className={`${inter.className} dark:bg-gray-900`}>
-        <AntdRegistry>
-          <ConfigProvider locale={zhCN}>
-            <main className="min-h-screen bg-gray-50 dark:bg-gray-900">
-              <div className="container mx-auto px-4 py-8">
-                {children}
-              </div>
-            </main>
-          </ConfigProvider>
-        </AntdRegistry>
+        <QueryProvider>
+          <AntdRegistry>
+            <ConfigProvider locale={zhCN}>
+              <main className="min-h-screen bg-gray-50 dark:bg-gray-900">
+                <div className="container mx-auto px-4 py-8">
+                  {children}
+                </div>
+              </main>
+            </ConfigProvider>
+          </AntdRegistry>
+        </QueryProvider>
       </body>
     </html>
   )

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 
-export async function GET(request: NextRequest) {
+export const dynamic = 'force-dynamic'
+
+export async function GET(_request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams
+    const searchParams = _request.nextUrl.searchParams
     const startDate = searchParams.get('startDate') || '2026-01-01'
     const endDate = searchParams.get('endDate') || new Date().toISOString().split('T')[0]
     const models = searchParams.get('models')?.split(',') || []
