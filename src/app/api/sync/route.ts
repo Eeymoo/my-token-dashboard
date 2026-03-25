@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const force = request.nextUrl.searchParams.get('force') === 'true'
 
     // 如果强制同步或没有正在进行的同步，则执行同步
-    if (force || !dataSync.isSyncing) {
+    if (force || !dataSync.getIsSyncingPublic()) {
       // 异步执行同步，不等待完成
       dataSync.syncData().catch(error => {
         console.error('同步执行失败:', error)
@@ -37,14 +37,14 @@ export async function GET(request: NextRequest) {
         success: true,
         message: '数据同步已开始',
         isSyncing: true,
-        lastSyncTime: dataSync.lastSyncTime,
+        lastSyncTime: dataSync.getLastSyncTimePublic(),
       })
     } else {
       return NextResponse.json({
         success: true,
         message: '同步已在运行中',
         isSyncing: true,
-        lastSyncTime: dataSync.lastSyncTime,
+        lastSyncTime: dataSync.getLastSyncTimePublic(),
       })
     }
 
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
         success: true,
         message: '数据同步已完成',
         isSyncing: false,
-        lastSyncTime: dataSync.lastSyncTime,
+        lastSyncTime: dataSync.getLastSyncTimePublic(),
       })
     } else {
       // 启动定时同步

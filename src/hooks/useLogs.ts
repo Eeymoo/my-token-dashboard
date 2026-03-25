@@ -2,9 +2,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import type { LogQueryParams, LogQueryResponse } from '@/types/api'
 
-// API 基础配置
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || ''
-
 // 获取日志数据
 export function useLogs(params: LogQueryParams) {
   return useQuery({

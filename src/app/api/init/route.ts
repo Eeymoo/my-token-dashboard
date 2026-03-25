@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import dataSync from '@/lib/sync'
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // 检查是否已经初始化
     const initialized = await dataSync.initialize()
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: '系统初始化完成，定时同步已启动',
-      lastSyncTime: dataSync.lastSyncTime,
+      lastSyncTime: dataSync.getLastSyncTimePublic(),
     })
 
   } catch (error) {

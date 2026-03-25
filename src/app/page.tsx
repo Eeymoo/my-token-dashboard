@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Tabs, Segmented, Switch, Spin, Alert, Empty } from 'antd'
+import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Segmented, Switch, Spin, Alert, Empty } from 'antd'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts'
 import { ReloadOutlined, DollarOutlined, BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -10,7 +10,6 @@ import './globals.css'
 
 const { RangePicker } = DatePicker
 const { Option } = Select
-const { TabPane } = Tabs
 
 // 时间范围映射
 const timeRangeMap = {

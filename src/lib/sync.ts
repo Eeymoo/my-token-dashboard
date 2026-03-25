@@ -272,6 +272,16 @@ class DataSync {
     return new Promise(resolve => setTimeout(resolve, ms))
   }
 
+  // 获取最后同步时间
+  getLastSyncTimePublic(): Date | null {
+    return this.lastSyncTime
+  }
+
+  // 获取同步状态
+  getIsSyncingPublic(): boolean {
+    return this.isSyncing
+  }
+
   // 启动定时同步
   startScheduledSync() {
     const intervalHours = parseInt(process.env.SYNC_INTERVAL_HOURS || '1')

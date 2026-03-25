@@ -8,7 +8,6 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('startDate') || '2026-01-01'
     const endDate = searchParams.get('endDate') || dayjs().format('YYYY-MM-DD')
     const models = searchParams.get('models')?.split(',') || []
-    const granularity = searchParams.get('granularity') as 'hour' | 'day' | 'week' | 'month' | undefined
     const page = parseInt(searchParams.get('page') || '1')
     const pageSize = parseInt(searchParams.get('pageSize') || '100')
     const offset = (page - 1) * pageSize

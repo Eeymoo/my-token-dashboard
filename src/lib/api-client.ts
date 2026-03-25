@@ -74,11 +74,8 @@ export async function fetchModels() {
   try {
     // 这里需要根据 API 文档确定获取模型列表的端点
     // 假设没有专门的模型列表接口，从日志中提取
-    const response = await apiClient.get('/api/log/', {
-      params: {
-        page_size: 1, // 只取一条来获取模型信息
-      },
-    })
+    // 暂时返回硬编码的模型列表
+    // 未来可以根据实际 API 响应调整
 
     // 从日志中提取模型信息（示例逻辑）
     // 实际应根据 API 响应调整
@@ -101,17 +98,11 @@ export async function fetchModels() {
 }
 
 // 获取汇总数据
-export async function fetchSummary(startDate: string, endDate: string, models?: string[]) {
+export async function fetchSummary(_startDate: string, _endDate: string, _models?: string[]) {
   try {
     // 根据 API 文档调整
-    const response = await apiClient.get('/api/log/', {
-      params: {
-        start_date: startDate,
-        end_date: endDate,
-        models: models?.join(','),
-        page_size: 1000, // 获取足够的数据进行聚合
-      },
-    })
+    // 暂时返回模拟数据
+    // 未来需要根据实际 API 响应进行数据聚合
 
     // 这里需要根据实际响应进行数据聚合
     // 暂时返回模拟数据
