@@ -228,12 +228,48 @@ docker-compose logs app
 docker-compose logs mysql
 ```
 
-### 6. 更新应用
+### 7. GitHub Container Registry 镜像
+
+每次发布 tag 时，GitHub Actions 会自动构建并推送 Docker 镜像到 GitHub Container Registry。
+
+#### 可用镜像标签
+
+```
+ghcr.io/eeymoo/my-token-dashboard:latest          # 最新稳定版
+ghcr.io/eeymoo/my-token-dashboard:v1.0.0          # 特定版本
+ghcr.io/eeymoo/my-token-dashboard:v1.0            # 主次版本
+ghcr.io/eeymoo/my-token-dashboard:v1              # 主版本
+```
+
+#### 使用预构建镜像
 
 ```bash
-# 拉取最新代码后重新构建
-docker-compose build --no-cache
-docker-compose up -d
+# 拉取最新镜像
+docker pull ghcr.io/eeymoo/my-token-dashboard:latest
+
+# 使用预构建镜像运行
+docker run -p 3000:3000 \
+  -e DATABASE_HOST=mysql \
+  -e DATABASE_NAME=ai_token_dashboard \
+  -e DATABASE_USER=username \
+  -e DATABASE_PASSWORD=password \
+  ghcr.io/eeymoo/my-token-dashboard:latest
+```
+
+#### 登录 GitHub Container Registry
+
+```bash
+# 使用 GitHub Personal Access Token 登录
+echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+```
+
+#### 创建新版本并发布
+
+```bash
+# 创建并推送新 tag
+git tag v1.0.0
+git push origin v1.0.0
+# GitHub Actions 会自动构建并推送镜像
 ```
 
 ## 🚢 部署
