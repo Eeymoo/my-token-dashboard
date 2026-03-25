@@ -7,8 +7,8 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # 复制 package.json 和 package-lock.json
-COPY package.json package-lock.json* ./
-RUN npm ci
+COPY package.json package-lock.json ./
+RUN npm install --legacy-peer-deps
 
 # 构建应用
 FROM base AS builder
