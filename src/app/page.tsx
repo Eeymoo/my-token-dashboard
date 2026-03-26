@@ -28,8 +28,9 @@ type ChartMode = 'time' | 'cumulative'
 export default function Home() {
   const [timeRange, setTimeRange] = useState<'day' | 'week' | 'month' | 'quarter' | 'year'>('quarter')
   const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const [chartMode, setChartMode] = useState<ChartMode>('time')
-  const [metric, setMetric] = useState<ChartMetric>('tokens')
+  const [timeTrendMode, setTimeTrendMode] = useState<ChartMode>('time')
+  const [timeTrendMetric, setTimeTrendMetric] = useState<ChartMetric>('tokens')
+  const [modelChartMode, setModelChartMode] = useState<ChartMode>('time')
   const [currency, setCurrency] = useState<'USD' | 'CNY'>('USD')
   const [darkMode, setDarkMode] = useState(false)
   // TODO(feat): [CHECKLIST 16.4/16.5] 管理分模型图表的堆叠开关及默认值，后续与卡片 extra 区域的 UI 绑定。
@@ -90,12 +91,12 @@ export default function Home() {
   }
 
   const getMetricValue = (item: ModelTimeSeriesPoint) => {
-    if (metric === 'tokens') return item.totalTokens
-    if (metric === 'cost') return currency === 'USD' ? item.totalCost : item.totalCost * 7.2
+    if (timeTrendMetric === 'tokens') return item.totalTokens
+    if (timeTrendMetric === 'cost') return currency === 'USD' ? item.totalCost : item.totalCost * 7.2
     return item.requestCount
   }
 
-  const metricLabel = metric === 'tokens' ? 'Token数' : metric === 'cost' ? `花费 (${currency})` : '请求数'
+  const timeTrendMetricLabel = timeTrendMetric === 'tokens' ? 'Token数' : timeTrendMetric === 'cost' ? `花费 (${currency})` : '请求数'
 
   // TODO(feat): [CHECKLIST 16.3/16.4] 将 modelTimeSeries 转换成图表可用的分时/累计数据集。
   const modelChartData = useMemo(() => {
@@ -120,7 +121,7 @@ export default function Home() {
         hourModelValueMap.set(item.hour, new Map<string, number>())
       }
 
-      hourModelValueMap.get(item.hour)!.set(item.modelId, getMetricValue(item))
+      hourModelValueMap.get(item.hour)!.set(item.modelId, item.totalTokens)
     })
 
     const hours = Array.from(hourSet).sort((a, b) => dayjs(a).valueOf() - dayjs(b).valueOf())
@@ -139,11 +140,11 @@ export default function Home() {
 
       models.forEach((modelId) => {
         const currentValue = values.get(modelId) || 0
-        const nextValue = chartMode === 'cumulative'
+        const nextValue = modelChartMode === 'cumulative'
           ? (cumulativeTotals.get(modelId) || 0) + currentValue
           : currentValue
 
-        if (chartMode === 'cumulative') {
+        if (modelChartMode === 'cumulative') {
           cumulativeTotals.set(modelId, nextValue)
         }
 
@@ -154,7 +155,7 @@ export default function Home() {
     })
 
     return { hours, models, rows, modelNameMap }
-  }, [chartMode, currency, metric, modelTimeSeries])
+  }, [modelChartMode, modelTimeSeries])
 
   // TODO(feat): [CHECKLIST 16.5/16.6] 基于堆叠开关与时间轴需求生成 ECharts 配置。
   const modelUsageChartOption = useMemo(() => {
@@ -167,7 +168,7 @@ export default function Home() {
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
-        valueFormatter: (value: number) => metric === 'cost' ? formatCurrency(currency === 'USD' ? value : value / 7.2) : formatNumber(value),
+        valueFormatter: (value: number) => formatNumber(value),
       },
       legend: {
         type: 'scroll',
@@ -190,7 +191,7 @@ export default function Home() {
       yAxis: {
         type: 'value',
         axisLabel: {
-          formatter: (value: number) => metric === 'cost' ? formatCurrency(currency === 'USD' ? value : value / 7.2) : formatNumber(value),
+          formatter: (value: number) => formatNumber(value),
         },
       },
       series: modelChartData.models.map((modelId, index) => ({
@@ -203,24 +204,37 @@ export default function Home() {
         data: modelChartData.rows.map((row) => Number(row[modelId] || 0)),
       })),
     }
-  }, [currency, metric, modelChartData, stacked])
+  }, [modelChartData, stacked])
 
   const timeTrendChartOption = useMemo(() => {
     if (timeSeriesData.length === 0) {
       return null
     }
 
-    const dataKey = metric === 'tokens' ? 'totalTokens' : metric === 'cost' ? 'totalCost' : 'requestCount'
-    const values = timeSeriesData.map((item: any) => {
-      const value = Number(item[dataKey] || 0)
-      return metric === 'cost' && currency === 'CNY' ? value * 7.2 : value
-    })
+    const points = timeSeriesData.reduce<Array<{ label: string, value: number }>>((acc, item: any) => {
+      const rawValue = Number(
+        timeTrendMetric === 'tokens'
+          ? item.totalTokens || 0
+          : timeTrendMetric === 'cost'
+            ? item.totalCost || 0
+            : item.requestCount || 0
+      )
+      const value = timeTrendMetric === 'cost' && currency === 'CNY' ? rawValue * 7.2 : rawValue
+      const previousValue = acc[acc.length - 1]?.value || 0
+
+      acc.push({
+        label: item.date,
+        value: timeTrendMode === 'cumulative' ? previousValue + value : value,
+      })
+
+      return acc
+    }, [])
 
     return {
       color: ['#8884d8'],
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (value: number) => metric === 'cost' ? formatCurrency(currency === 'USD' ? value : value / 7.2) : formatNumber(value),
+        valueFormatter: (value: number) => timeTrendMetric === 'cost' ? formatCurrency(currency === 'USD' ? value : value / 7.2) : formatNumber(value),
       },
       grid: {
         left: 16,
@@ -231,23 +245,23 @@ export default function Home() {
       },
       xAxis: {
         type: 'category',
-        data: timeSeriesData.map((item: any) => item.date),
+        data: points.map((item) => item.label),
       },
       yAxis: {
         type: 'value',
         axisLabel: {
-          formatter: (value: number) => metric === 'cost' ? formatCurrency(currency === 'USD' ? value : value / 7.2) : formatNumber(value),
+          formatter: (value: number) => timeTrendMetric === 'cost' ? formatCurrency(currency === 'USD' ? value : value / 7.2) : formatNumber(value),
         },
       },
       series: [{
-        name: metricLabel,
+        name: timeTrendMetricLabel,
         type: 'line',
         smooth: true,
         showSymbol: false,
-        data: values,
+        data: points.map((item) => item.value),
       }],
     }
-  }, [currency, metric, metricLabel, timeSeriesData])
+  }, [currency, timeSeriesData, timeTrendMetric, timeTrendMetricLabel, timeTrendMode])
 
   const handleRefresh = () => {
     refetchSummary()
@@ -454,8 +468,8 @@ export default function Home() {
                       { label: '分时', value: 'time' },
                       { label: '累计', value: 'cumulative' },
                     ]}
-                    value={chartMode}
-                    onChange={(value) => setChartMode(value as ChartMode)}
+                    value={timeTrendMode}
+                    onChange={(value) => setTimeTrendMode(value as ChartMode)}
                   />
                   <Segmented
                     size="small"
@@ -464,8 +478,8 @@ export default function Home() {
                       { label: '花费', value: 'cost' },
                       { label: '请求数', value: 'requests' },
                     ]}
-                    value={metric}
-                    onChange={(value) => setMetric(value as ChartMetric)}
+                    value={timeTrendMetric}
+                    onChange={(value) => setTimeTrendMetric(value as ChartMetric)}
                   />
                 </Space>
               }
@@ -493,8 +507,8 @@ export default function Home() {
                       { label: '分时', value: 'time' },
                       { label: '累计', value: 'cumulative' },
                     ]}
-                    value={chartMode}
-                    onChange={(value) => setChartMode(value as ChartMode)}
+                    value={modelChartMode}
+                    onChange={(value) => setModelChartMode(value as ChartMode)}
                   />
                   <Checkbox checked={stacked} onChange={(event) => setStacked(event.target.checked)}>
                     堆叠
