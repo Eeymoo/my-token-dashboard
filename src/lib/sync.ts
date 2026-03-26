@@ -241,9 +241,13 @@ class DataSync {
 
     const avgLatencyRaw = log.requests?.avgLatency ?? log.latency ?? log.avg_latency ?? log.avgLatency ?? log.use_time
     const avgLatency = Number.isFinite(Number(avgLatencyRaw)) ? Number(avgLatencyRaw) : null
-    const timestamp = typeof log.created_at === 'number'
+
+    const timestampSource = typeof log.created_at === 'number'
       ? dayjs.unix(log.created_at).toISOString()
-      : toNullableString(log.timestamp || log.created_at || log.createdAt, new Date().toISOString())!
+      : toNullableString(log.timestamp || log.created_at || log.createdAt)
+
+    const timestamp = dayjs(timestampSource || new Date().toISOString()).format('YYYY-MM-DD HH:mm:ss')
+
     const endpoint = (() => {
       const direct = toNullableString(log.endpoint || log.path)
       if (direct) return direct
