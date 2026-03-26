@@ -1,6 +1,6 @@
 import cron from 'node-cron'
 import { fetchLogs } from './api-client'
-import { insertLog, query, initDatabase, testConnection } from './db'
+import { insertLogs, query, initDatabase, testConnection } from './db'
 import dayjs from 'dayjs'
 import { syncModelPrices } from './model-pricing'
 
@@ -13,6 +13,16 @@ class DataSync {
 
   private getSyncCronExpression() {
     return process.env.SYNC_CRON || '0 * * * *'
+  }
+
+  private getWindowConcurrency() {
+    const parsed = Number(process.env.SYNC_WINDOW_CONCURRENCY || '3')
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 3
+  }
+
+  private getRecentWindowDays() {
+    const parsed = Number(process.env.SYNC_RECENT_WINDOW_DAYS || '7')
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 7
   }
 
   private getNextSyncTime() {
@@ -66,79 +76,31 @@ class DataSync {
 
       console.log(`📅 同步时间范围: ${startDate} 至 ${endDate}`)
 
-      // 从 API 获取数据
-      // 这里需要根据实际 API 分页获取所有数据
-      let page = 1
+      const windows = this.buildDailySyncWindows(startDate, endDate)
+      console.log(`🪟 本次同步拆分为 ${windows.length} 个时间窗口`)
+
       const pageSize = 100
-      let totalSynced = 0
+      const requestType = 0
+      const windowConcurrency = this.getWindowConcurrency()
+      const recentWindowDays = this.getRecentWindowDays()
+      const recentCutoffDate = dayjs(endDate).subtract(recentWindowDays - 1, 'day').format('YYYY-MM-DD')
+      const prioritizedWindows = this.prioritizeRecentWindows(windows, recentCutoffDate)
 
-      while (true) {
-        console.log(`📄 获取第 ${page} 页数据...`)
-
-        const response = await fetchLogs({
-          startDate,
-          endDate,
-          page,
-          pageSize,
-        })
-
-        if (!response?.success) {
-          console.log('⚠️ API 响应失败或格式异常，停止同步')
-          break
-        }
-
-        const logs = response.data.logs || []
-
-        if (logs.length === 0) {
-          console.log('✅ 数据获取完成')
-          break
-        }
-
-        console.log(`📥 获取到 ${logs.length} 条日志`)
-
-        // 处理并存储日志
-        for (const log of logs) {
-          try {
-            const dbLog = this.transformLogToDbFormat(log)
-            await insertLog(dbLog)
-            totalSynced++
-          } catch (error) {
-            console.error('❌ 插入日志失败:', error)
-          }
-        }
-
-        const currentPage = Number(response.data.pagination.page || page)
-        const totalPages = Number(response.data.pagination.totalPages || 0)
-
-        if (!totalPages || currentPage >= totalPages) {
-          break
-        }
-
-        page = currentPage + 1
-        await this.delay(1000)
-      }
+      const totalSynced = await this.syncWindowsWithConcurrency(
+        prioritizedWindows,
+        windowConcurrency,
+        pageSize,
+        requestType
+      )
 
       await this.updateSyncMetadata(completedAt)
 
       const duration = Date.now() - startTime
       console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
 
-      try {
-        await this.ensureMetadataTable()
-        await this.aggregateData()
-
-      try {
-        const priceResult = await syncModelPrices()
-        console.log(
-          '💰 模型价格同步完成:',
-          `更新 ${priceResult.updatedModels}/${priceResult.totalModels}, 来源 ${priceResult.source}, fetchedAt ${priceResult.fetchedAt}, cache=${priceResult.usedCache}`
-        )
-      } catch (priceError) {
-        console.error('❌ 模型价格同步失败，保留旧价格:', priceError)
-      }
-      } catch (aggError) {
-        console.error('❌ 数据聚合失败:', aggError)
-      }
+      void this.runPostSyncTasks().catch((error) => {
+        console.error('❌ 同步后处理失败:', error)
+      })
     } catch (error) {
       console.error('❌ 数据同步失败:', error)
     } finally {
@@ -146,6 +108,137 @@ class DataSync {
     }
   }
 
+  private async syncWindowsWithConcurrency(
+    windows: Array<{ startDate: string; endDate: string }>,
+    concurrency: number,
+    pageSize: number,
+    requestType: number
+  ) {
+    let totalSynced = 0
+    let currentIndex = 0
+
+    const worker = async () => {
+      let workerSynced = 0
+
+      while (currentIndex < windows.length) {
+        const window = windows[currentIndex++]
+        if (!window) break
+
+        workerSynced += await this.syncSingleWindow(window, pageSize, requestType)
+      }
+
+      return workerSynced
+    }
+
+    const workers = Array.from(
+      { length: Math.min(concurrency, windows.length || 1) },
+      () => worker()
+    )
+
+    const results = await Promise.all(workers)
+
+    for (const count of results) {
+      totalSynced += count
+    }
+
+    return totalSynced
+  }
+
+  private async syncSingleWindow(
+    window: { startDate: string; endDate: string },
+    pageSize: number,
+    requestType: number
+  ) {
+    console.log(`🗓️ 同步窗口: ${window.startDate} 至 ${window.endDate}`)
+
+    let page = 1
+    let synced = 0
+
+    while (true) {
+      console.log(`📄 [${window.startDate}] 获取第 ${page} 页数据...`)
+
+      const response = await fetchLogs({
+        startDate: window.startDate,
+        endDate: window.endDate,
+        page,
+        pageSize,
+        type: requestType,
+      })
+
+      if (!response?.success) {
+        console.log(`⚠️ API 响应失败或格式异常，停止窗口 ${window.startDate} 同步`)
+        break
+      }
+
+      const logs = response.data.logs || []
+
+      if (logs.length === 0) {
+        console.log(`✅ 窗口 ${window.startDate} 数据获取完成`)
+        break
+      }
+
+      console.log(`📥 窗口 ${window.startDate} 获取到 ${logs.length} 条日志`)
+
+      const dbLogs = logs.map((log) => this.transformLogToDbFormat(log))
+      await insertLogs(dbLogs)
+      synced += dbLogs.length
+
+      const currentPage = Number(response.data.pagination.page || page)
+      const totalPages = Number(response.data.pagination.totalPages || 0)
+
+      if (!totalPages || currentPage >= totalPages || logs.length < pageSize) {
+        break
+      }
+
+      page = currentPage + 1
+    }
+
+    return synced
+  }
+
+  private prioritizeRecentWindows(
+    windows: Array<{ startDate: string; endDate: string }>,
+    recentCutoffDate: string
+  ) {
+    const recentWindows = windows.filter((window) => window.startDate >= recentCutoffDate)
+    const olderWindows = windows.filter((window) => window.startDate < recentCutoffDate)
+
+    return [...recentWindows.reverse(), ...olderWindows.reverse()]
+  }
+
+  private buildDailySyncWindows(startDate: string, endDate: string) {
+    const windows: Array<{ startDate: string; endDate: string }> = []
+
+    let cursor = dayjs(startDate)
+    const end = dayjs(endDate)
+
+    while (cursor.isBefore(end) || cursor.isSame(end, 'day')) {
+      const date = cursor.format('YYYY-MM-DD')
+      windows.push({ startDate: date, endDate: date })
+      cursor = cursor.add(1, 'day')
+    }
+
+    return windows
+  }
+
+  private async runPostSyncTasks() {
+    try {
+      await this.ensureMetadataTable()
+      await this.aggregateData()
+    } catch (aggError) {
+      console.error('❌ 数据聚合失败:', aggError)
+    }
+
+    try {
+      const priceResult = await syncModelPrices()
+      console.log(
+        '💰 模型价格同步完成:',
+        `更新 ${priceResult.updatedModels}/${priceResult.totalModels}, 来源 ${priceResult.source}, fetchedAt ${priceResult.fetchedAt}, cache=${priceResult.usedCache}`
+      )
+    } catch (priceError) {
+      console.error('❌ 模型价格同步失败，保留旧价格:', priceError)
+    }
+  }
 
   private async ensureMetadataTable() {
     if (this.metadataTableReady) return
@@ -468,11 +561,6 @@ class DataSync {
     console.log(`✅ ${periodType}聚合完成`)
   }
 
-  // 延迟函数
-  private delay(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms))
-  }
-
   // 获取最后同步时间
   getLastSyncTimePublic(): Date | null {
     return this.lastSyncTime
@@ -530,9 +618,10 @@ class DataSync {
 
     this.scheduledTask.stop()
     this.scheduledTask = null
+    console.log('⏹️ 已停止定时同步任务')
   }
 }
 
-// 导出单例实例
 const dataSync = new DataSync()
+
 export default dataSync

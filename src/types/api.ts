@@ -74,6 +74,7 @@ export interface LogQueryParams {
   cumulative?: boolean // 是否返回累计数据
   page?: number
   pageSize?: number
+  type?: number
 }
 
 // ==================== API 响应 ====================

@@ -298,22 +298,37 @@ export async function query(sql: string, params?: any[]) {
 }
 
 // 插入日志记录
-export async function insertLog(log: any) {
+export async function insertLogs(logs: any[]) {
+  if (logs.length === 0) return
+
+  const placeholders = logs
+    .map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .join(', ')
+
   const sql = `
     INSERT INTO api_logs (
       log_id, timestamp, model_id, model_name, provider, category,
       user_id, user_name, team_id, total_tokens, prompt_tokens, completion_tokens,
       total_cost, prompt_cost, completion_cost, request_count, success_count,
       error_count, avg_latency, endpoint, status_code
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES ${placeholders}
     ON DUPLICATE KEY UPDATE
       total_tokens = VALUES(total_tokens),
+      prompt_tokens = VALUES(prompt_tokens),
+      completion_tokens = VALUES(completion_tokens),
       total_cost = VALUES(total_cost),
+      prompt_cost = VALUES(prompt_cost),
+      completion_cost = VALUES(completion_cost),
       request_count = VALUES(request_count),
+      success_count = VALUES(success_count),
+      error_count = VALUES(error_count),
+      avg_latency = VALUES(avg_latency),
+      endpoint = VALUES(endpoint),
+      status_code = VALUES(status_code),
       updated_at = CURRENT_TIMESTAMP
   `
 
-  const params = [
+  const params = logs.flatMap((log) => [
     log.logId,
     log.timestamp,
     log.modelId,
@@ -335,7 +350,7 @@ export async function insertLog(log: any) {
     log.avgLatency,
     log.endpoint,
     log.statusCode,
-  ]
+  ])
 
   return query(sql, params)
 }
