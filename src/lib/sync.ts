@@ -10,13 +10,14 @@ class DataSync {
   private metadataTableReady = false
   private scheduledTask: cron.ScheduledTask | null = null
 
-  private getSyncIntervalHours() {
-    return Math.max(1, parseInt(process.env.SYNC_INTERVAL_HOURS || '1'))
+  private getSyncCronExpression() {
+    return process.env.SYNC_CRON || '0 * * * *'
   }
 
-  private getNextSyncTime(baseTime: Date | null = this.lastSyncTime) {
-    if (!baseTime) return null
-    return dayjs(baseTime).add(this.getSyncIntervalHours(), 'hour').toDate()
+  private getNextSyncTime() {
+    return this.lastSyncTime
+      ? dayjs(this.lastSyncTime).add(1, 'minute').toDate()
+      : null
   }
 
   // 初始化同步器
@@ -331,7 +332,8 @@ class DataSync {
 
   private async updateSyncMetadata(completedAt: Date) {
     const completedAtValue = dayjs(completedAt).format('YYYY-MM-DD HH:mm:ss')
-    const nextSyncValue = dayjs(completedAt).add(this.getSyncIntervalHours(), 'hour').format('YYYY-MM-DD HH:mm:ss')
+    const nextSyncTime = this.getNextSyncTime()
+    const nextSyncValue = nextSyncTime ? dayjs(nextSyncTime).format('YYYY-MM-DD HH:mm:ss') : null
 
     try {
       await this.ensureMetadataTable()
@@ -342,9 +344,9 @@ class DataSync {
           ('last_sync_time', ?),
           ('last_completed_sync_time', ?),
           ('next_sync_time', ?),
-          ('sync_interval_hours', ?)
+          ('sync_cron', ?)
         ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`,
-        [completedAtValue, completedAtValue, nextSyncValue, String(this.getSyncIntervalHours())]
+        [completedAtValue, completedAtValue, nextSyncValue, this.getSyncCronExpression()]
       )
       this.lastSyncTime = completedAt
     } catch (error) {
@@ -354,13 +356,14 @@ class DataSync {
 
   async getSyncStatus() {
     const lastCompletedSyncTime = await this.getLastCompletedSyncTime()
-    const nextSyncTime = this.getNextSyncTime(lastCompletedSyncTime)
+    this.lastSyncTime = lastCompletedSyncTime
+    const nextSyncTime = this.getNextSyncTime()
 
     return {
       isSyncing: this.isSyncing,
       lastCompletedSyncTime,
       nextSyncTime,
-      syncIntervalHours: this.getSyncIntervalHours(),
+      syncCron: this.getSyncCronExpression(),
     }
   }
 
@@ -473,10 +476,10 @@ class DataSync {
 
   // 启动定时同步
   startScheduledSync() {
-    const intervalHours = this.getSyncIntervalHours()
+    const cronExpression = this.getSyncCronExpression()
 
-    if (intervalHours <= 0) {
-      console.log('⏸️  定时同步已禁用')
+    if (!cron.validate(cronExpression)) {
+      console.log(`⏸️  无效的定时同步 cron 表达式: ${cronExpression}`)
       this.stopScheduledSync()
       return
     }
@@ -486,10 +489,7 @@ class DataSync {
       return
     }
 
-    // 转换为 cron 表达式（每小时运行一次）
-    const cronExpression = `0 */${intervalHours} * * *`
-
-    console.log(`⏰ 设置定时同步: ${cronExpression} (每 ${intervalHours} 小时)`)
+    console.log(`⏰ 设置定时同步: ${cronExpression}`)
 
     this.scheduledTask = cron.schedule(cronExpression, () => {
       console.log('⏰ 定时同步任务触发')

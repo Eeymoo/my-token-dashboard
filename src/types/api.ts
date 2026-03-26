@@ -166,7 +166,7 @@ export interface SummaryResponse {
       isSyncing: boolean
       lastCompletedSyncTime: string | null
       nextSyncTime: string | null
-      syncIntervalHours: number
+      syncCron: string
     }
   }
   error?: string

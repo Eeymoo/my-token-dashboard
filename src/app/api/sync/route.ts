@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
         isSyncing: true,
         lastSyncTime: syncStatus.lastCompletedSyncTime?.toISOString() || null,
         nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
-        syncIntervalHours: syncStatus.syncIntervalHours,
+        syncCron: syncStatus.syncCron,
       })
     } else {
       return NextResponse.json({
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
         isSyncing: true,
         lastSyncTime: syncStatus.lastCompletedSyncTime?.toISOString() || null,
         nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
-        syncIntervalHours: syncStatus.syncIntervalHours,
+        syncCron: syncStatus.syncCron,
       })
     }
 
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
         isSyncing: false,
         lastSyncTime: syncStatus.lastCompletedSyncTime?.toISOString() || null,
         nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
-        syncIntervalHours: syncStatus.syncIntervalHours,
+        syncCron: syncStatus.syncCron,
       })
     } else {
       // 启动定时同步

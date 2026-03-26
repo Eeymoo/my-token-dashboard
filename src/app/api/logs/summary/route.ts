@@ -135,7 +135,7 @@ export async function GET(_request: NextRequest) {
           isSyncing: syncStatus.isSyncing,
           lastCompletedSyncTime: syncStatus.lastCompletedSyncTime?.toISOString() || null,
           nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
-          syncIntervalHours: syncStatus.syncIntervalHours,
+          syncCron: syncStatus.syncCron,
         },
       },
     })
