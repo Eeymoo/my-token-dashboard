@@ -87,7 +87,7 @@ npm start
 NEW_API_BASE_URL=https://new-api.onemue.cn/
 NEW_API_KEY=您的API密钥
 
-# 数据库配置
+# 数据库配置（运行时读取，不会被构建阶段写死）
 DATABASE_HOST=localhost
 DATABASE_PORT=3306
 DATABASE_NAME=ai_token_dashboard
@@ -97,6 +97,8 @@ DATABASE_PASSWORD=密码
 # 管理配置
 ADMIN_API_KEY=设置一个管理密钥
 ```
+
+> ⚠️ **注意**：Next.js 服务端代码（包括 `/api/logs/summary`、同步任务等）会在运行时直接读取上述 DATABASE_* 变量。如果通过 `docker-compose` 运行，容器内会自动注入 `DATABASE_HOST=mysql`；在本机直接 `npm run dev` 或 `npm start` 时，请手动把 `DATABASE_HOST` 配置成可以访问 MySQL 的地址（例如 `127.0.0.1`），否则会连到默认的 IPv6 `::1:3306` 而失败。
 
 ### 可选配置
 ```env
@@ -242,6 +244,8 @@ ghcr.io/eeymoo/my-token-dashboard:v1              # 主版本
 ```
 
 #### 使用预构建镜像
+
+运行预构建镜像时，数据库等服务端配置应通过容器运行时环境变量注入，而不是在镜像构建阶段写死。
 
 ```bash
 # 拉取最新镜像
