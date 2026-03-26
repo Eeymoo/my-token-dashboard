@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
-import type { LogQueryParams, LogQueryResponse } from '@/types/api'
+import type { LogQueryParams, LogQueryResponse, SummaryResponse } from '@/types/api'
 
 // 获取日志数据
 export function useLogs(params: LogQueryParams) {
@@ -24,17 +24,19 @@ export function useLogs(params: LogQueryParams) {
 }
 
 // 获取汇总数据
+// TODO(feat): [CHECKLIST 16.1/16.3] 解析后端新增的 modelTimeSeries 字段并提供友好的前端消费接口。
 export function useSummary(startDate: string, endDate: string, models?: string[]) {
   return useQuery({
     queryKey: ['summary', startDate, endDate, models],
     queryFn: async () => {
-      const response = await axios.get('/api/logs/summary', {
+      const response = await axios.get<SummaryResponse>('/api/logs/summary', {
         params: {
           startDate,
           endDate,
           models: models?.join(','),
         },
       })
+      // TODO(feat): [CHECKLIST 16.3] 在此处整理 modelTimeSeries、timeSeries 等字段，预计算分时/累计数据和默认排序。
       return response.data
     },
     staleTime: 1 * 60 * 1000, // 1分钟

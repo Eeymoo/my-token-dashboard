@@ -124,6 +124,48 @@ export interface AggregatedDataPoint {
   }>
 }
 
+export interface SummaryTimeSeriesPoint {
+  date: string
+  totalTokens: number
+  totalCost: number
+  requestCount: number
+}
+
+export interface ModelBreakdownItem {
+  modelId: string
+  modelName: string
+  totalTokens: number
+  totalCost: number
+  requestCount: number
+}
+
+export interface ModelTimeSeriesPoint {
+  hour: string
+  modelId: string
+  modelName: string
+  totalTokens: number
+  totalCost: number
+  requestCount: number
+}
+
+export interface SummaryResponse {
+  success: boolean
+  data: {
+    summary: {
+      totalTokens: number
+      totalCost: number
+      totalRequests: number
+      successRequests: number
+      errorRequests: number
+      avgLatency: number
+    }
+    modelBreakdown: ModelBreakdownItem[]
+    timeSeries: SummaryTimeSeriesPoint[]
+    modelTimeSeries: ModelTimeSeriesPoint[]
+  }
+  error?: string
+}
+
 // ==================== 实时数据 ====================
 export interface RealtimeUpdate {
   timestamp: string

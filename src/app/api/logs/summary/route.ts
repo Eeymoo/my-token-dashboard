@@ -88,6 +88,32 @@ export async function GET(_request: NextRequest) {
       requestCount: row.requestCount || 0,
     }))
 
+    // 获取分模型按小时时间序列
+    const modelTimeSeriesResult = await query(
+    // TODO(test): 为 modelTimeSeries 查询补充 API 测试
+    // TODO(docs): README/API 文档同步说明 modelTimeSeries 字段
+      `SELECT
+        DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as hour,
+        model_id,
+        model_name,
+        SUM(total_tokens) as totalTokens,
+        SUM(total_cost) as totalCost,
+        SUM(request_count) as requestCount
+       FROM api_logs ${whereClause}
+       GROUP BY hour, model_id, model_name
+       ORDER BY hour ASC`,
+      queryParams
+    ) as any[]
+
+    const modelTimeSeries = modelTimeSeriesResult.map((row: any) => ({
+      hour: row.hour,
+      modelId: row.model_id,
+      modelName: row.model_name || row.model_id,
+      totalTokens: Number(row.totalTokens) || 0,
+      totalCost: Number(row.totalCost) || 0,
+      requestCount: Number(row.requestCount) || 0,
+    }))
+
     return NextResponse.json({
       success: true,
       data: {
@@ -101,9 +127,9 @@ export async function GET(_request: NextRequest) {
         },
         modelBreakdown,
         timeSeries,
+        modelTimeSeries,
       },
     })
-
   } catch (error) {
     console.error('获取汇总数据失败:', error)
     return NextResponse.json(
