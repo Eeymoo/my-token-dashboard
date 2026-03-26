@@ -111,6 +111,15 @@ export async function initDatabase() {
     `)
 
     console.log('✅ 数据库表初始化完成')
+
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS sync_metadata (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        \`key\` VARCHAR(100) UNIQUE NOT NULL,
+        \`value\` TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `)
   } catch (error) {
     console.error('❌ 数据库表初始化失败:', error)
     throw error

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { query } from '@/lib/db'
+import dataSync from '@/lib/sync'
 
 export const dynamic = 'force-dynamic'
 
@@ -114,6 +115,8 @@ export async function GET(_request: NextRequest) {
       requestCount: Number(row.requestCount) || 0,
     }))
 
+    const syncStatus = await dataSync.getSyncStatus()
+
     return NextResponse.json({
       success: true,
       data: {
@@ -128,6 +131,12 @@ export async function GET(_request: NextRequest) {
         modelBreakdown,
         timeSeries,
         modelTimeSeries,
+        syncStatus: {
+          isSyncing: syncStatus.isSyncing,
+          lastCompletedSyncTime: syncStatus.lastCompletedSyncTime?.toISOString() || null,
+          nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
+          syncIntervalHours: syncStatus.syncIntervalHours,
+        },
       },
     })
   } catch (error) {

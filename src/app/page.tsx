@@ -2,11 +2,10 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Segmented, Switch, Spin, Alert, Empty, Checkbox } from 'antd'
-import { ReloadOutlined, DollarOutlined, BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
+import { ReloadOutlined, DollarOutlined, BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import ReactECharts from 'echarts-for-react'
-import { useSummary, useModels, useSync } from '@/hooks/useLogs'
-import type { ModelTimeSeriesPoint } from '@/types/api'
+import { useSummary, useModels } from '@/hooks/useLogs'
 import './globals.css'
 
 const { RangePicker } = DatePicker
@@ -35,7 +34,6 @@ export default function Home() {
   const [darkMode, setDarkMode] = useState(false)
   // TODO(feat): [CHECKLIST 16.4/16.5] 管理分模型图表的堆叠开关及默认值，后续与卡片 extra 区域的 UI 绑定。
   const [stacked, setStacked] = useState(true)
-  const [lastUpdated, setLastUpdated] = useState(dayjs())
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null)
 
   useEffect(() => {
@@ -59,11 +57,6 @@ export default function Home() {
     isLoading: modelsLoading
   } = useModels()
 
-  const {
-    mutate: triggerSync,
-    isPending: syncPending
-  } = useSync()
-
   const summary = summaryData?.data?.summary || {
     totalTokens: 0,
     totalCost: 0,
@@ -74,8 +67,10 @@ export default function Home() {
   }
 
   const timeSeriesData = summaryData?.data?.timeSeries || []
-  // TODO(feat): [CHECKLIST 16.1/16.3] 后端返回 modelTimeSeries 后需在此进行容错与默认处理。
   const modelTimeSeries = summaryData?.data?.modelTimeSeries || []
+  const syncStatus = summaryData?.data?.syncStatus
+  const lastUpdated = syncStatus?.lastCompletedSyncTime ? dayjs(syncStatus.lastCompletedSyncTime) : null
+  const nextSyncTime = syncStatus?.nextSyncTime ? dayjs(syncStatus.nextSyncTime) : null
 
   const formatNumber = (num: number) => {
     if (num >= 1000000000) return `${(num / 1000000000).toFixed(1)}B`
@@ -90,13 +85,9 @@ export default function Home() {
     return `${symbol}${(amount * rate).toFixed(2)}`
   }
 
-  const getMetricValue = (item: ModelTimeSeriesPoint) => {
-    if (timeTrendMetric === 'tokens') return item.totalTokens
-    if (timeTrendMetric === 'cost') return currency === 'USD' ? item.totalCost : item.totalCost * 7.2
-    return item.requestCount
-  }
-
   const timeTrendMetricLabel = timeTrendMetric === 'tokens' ? 'Token数' : timeTrendMetric === 'cost' ? `花费 (${currency})` : '请求数'
+  const nextSyncLabel = nextSyncTime?.isValid() ? nextSyncTime.format('HH:mm') : '--:--'
+  const lastUpdatedLabel = lastUpdated?.isValid() ? lastUpdated.format('YYYY-MM-DD HH:mm:ss') : '暂无同步记录'
 
   // TODO(feat): [CHECKLIST 16.3/16.4] 将 modelTimeSeries 转换成图表可用的分时/累计数据集。
   const modelChartData = useMemo(() => {
@@ -265,19 +256,6 @@ export default function Home() {
 
   const handleRefresh = () => {
     refetchSummary()
-    setLastUpdated(dayjs())
-  }
-
-  const handleManualSync = () => {
-    triggerSync(true, {
-      onSuccess: () => {
-        console.log('同步成功')
-        handleRefresh()
-      },
-      onError: (error) => {
-        console.error('同步失败:', error)
-      },
-    })
   }
 
   if (summaryError) {
@@ -329,12 +307,8 @@ export default function Home() {
             >
               刷新数据
             </Button>
-            <Button
-              icon={<ReloadOutlined spin />}
-              onClick={handleManualSync}
-              loading={syncPending}
-            >
-              同步数据
+            <Button icon={<ClockCircleOutlined />} disabled>
+              等待下次同步（{nextSyncLabel}）
             </Button>
             <Switch
               checkedChildren="暗色"
@@ -530,7 +504,7 @@ export default function Home() {
         </Row>
 
         <div className="mt-6 text-center text-gray-500 text-sm dark:text-gray-400">
-          <p>最后更新时间: {lastUpdated.format('YYYY-MM-DD HH:mm:ss')}</p>
+          <p>最后更新时间: {lastUpdatedLabel}</p>
         </div>
       </div>
     </div>

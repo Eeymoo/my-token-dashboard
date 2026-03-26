@@ -9,6 +9,15 @@ class DataSync {
   private lastSyncTime: Date | null = null
   private metadataTableReady = false
 
+  private getSyncIntervalHours() {
+    return Math.max(1, parseInt(process.env.SYNC_INTERVAL_HOURS || '1'))
+  }
+
+  private getNextSyncTime(baseTime: Date | null = this.lastSyncTime) {
+    if (!baseTime) return null
+    return dayjs(baseTime).add(this.getSyncIntervalHours(), 'hour').toDate()
+  }
+
   // 初始化同步器
   async initialize() {
     console.log('🔄 初始化数据同步器...')
@@ -42,14 +51,15 @@ class DataSync {
 
     this.isSyncing = true
     const startTime = Date.now()
+    const completedAt = new Date()
 
     try {
       console.log('🔄 开始数据同步...')
 
       // 获取上次同步的时间（如果没有，则从2026-01-01开始）
       const lastSync = await this.getLastSyncTime()
-      const startDate = lastSync || '2026-01-01'
-      const endDate = dayjs().format('YYYY-MM-DD')
+      const startDate = lastSync ? dayjs(lastSync).format('YYYY-MM-DD') : '2026-01-01'
+      const endDate = dayjs(completedAt).format('YYYY-MM-DD')
 
       console.log(`📅 同步时间范围: ${startDate} 至 ${endDate}`)
 
@@ -86,7 +96,6 @@ class DataSync {
         // 处理并存储日志
         for (const log of logs) {
           try {
-            // 转换日志格式以适应数据库
             const dbLog = this.transformLogToDbFormat(log)
             await insertLog(dbLog)
             totalSynced++
@@ -103,31 +112,26 @@ class DataSync {
         }
 
         page = currentPage + 1
-      // 避免请求过于频繁
-      await this.delay(1000)
+        await this.delay(1000)
+      }
+
+      await this.updateSyncMetadata(completedAt)
+
+      const duration = Date.now() - startTime
+      console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
+
+      try {
+        await this.ensureMetadataTable()
+        await this.aggregateData()
+      } catch (aggError) {
+        console.error('❌ 数据聚合失败:', aggError)
+      }
+    } catch (error) {
+      console.error('❌ 数据同步失败:', error)
+    } finally {
+      this.isSyncing = false
     }
-
-    // 更新最后同步时间
-    await this.updateLastSyncTime(endDate)
-
-    const duration = Date.now() - startTime
-    console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
-
-    // 触发数据聚合
-    try {
-      await this.ensureMetadataTable()
-      await this.aggregateData()
-    } catch (aggError) {
-      console.error('❌ 数据聚合失败:', aggError)
-    }
-
-  } catch (error) {
-    console.error('❌ 数据同步失败:', error)
-  } finally {
-    this.isSyncing = false
-    this.lastSyncTime = new Date()
   }
-}
 
 
   private async ensureMetadataTable() {
@@ -305,17 +309,57 @@ class DataSync {
     }
   }
 
-  // 更新最后同步时间
-  private async updateLastSyncTime(time: string) {
+  private async getLastCompletedSyncTime(): Promise<Date | null> {
+    try {
+      await this.ensureMetadataTable()
+      const result = await query(
+        "SELECT `value` FROM sync_metadata WHERE `key` = 'last_completed_sync_time'"
+      ) as any[]
+
+      if (result.length === 0 || !result[0].value) {
+        return null
+      }
+
+      const parsed = dayjs(result[0].value)
+      return parsed.isValid() ? parsed.toDate() : null
+    } catch (error) {
+      console.warn('获取最后完成同步时间失败:', error)
+      return null
+    }
+  }
+
+  private async updateSyncMetadata(completedAt: Date) {
+    const completedAtValue = dayjs(completedAt).format('YYYY-MM-DD HH:mm:ss')
+    const nextSyncValue = dayjs(completedAt).add(this.getSyncIntervalHours(), 'hour').format('YYYY-MM-DD HH:mm:ss')
+
     try {
       await this.ensureMetadataTable()
       await query(
-        "INSERT INTO sync_metadata (`key`, `value`) VALUES ('last_sync_time', ?) " +
-        "ON DUPLICATE KEY UPDATE `value` = ?",
-        [time, time]
+        `INSERT INTO sync_metadata (
+          \`key\`, \`value\`
+        ) VALUES
+          ('last_sync_time', ?),
+          ('last_completed_sync_time', ?),
+          ('next_sync_time', ?),
+          ('sync_interval_hours', ?)
+        ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`,
+        [completedAtValue, completedAtValue, nextSyncValue, String(this.getSyncIntervalHours())]
       )
+      this.lastSyncTime = completedAt
     } catch (error) {
       console.error('更新同步时间失败:', error)
+    }
+  }
+
+  async getSyncStatus() {
+    const lastCompletedSyncTime = await this.getLastCompletedSyncTime()
+    const nextSyncTime = this.getNextSyncTime(lastCompletedSyncTime)
+
+    return {
+      isSyncing: this.isSyncing,
+      lastCompletedSyncTime,
+      nextSyncTime,
+      syncIntervalHours: this.getSyncIntervalHours(),
     }
   }
 
@@ -412,6 +456,15 @@ class DataSync {
     return this.lastSyncTime
   }
 
+  async hydrateLastSyncTime() {
+    if (this.lastSyncTime) {
+      return this.lastSyncTime
+    }
+
+    this.lastSyncTime = await this.getLastCompletedSyncTime()
+    return this.lastSyncTime
+  }
+
   // 获取同步状态
   getIsSyncingPublic(): boolean {
     return this.isSyncing
@@ -419,7 +472,7 @@ class DataSync {
 
   // 启动定时同步
   startScheduledSync() {
-    const intervalHours = parseInt(process.env.SYNC_INTERVAL_HOURS || '1')
+    const intervalHours = this.getSyncIntervalHours()
 
     if (intervalHours <= 0) {
       console.log('⏸️  定时同步已禁用')

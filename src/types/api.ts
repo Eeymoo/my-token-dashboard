@@ -162,6 +162,12 @@ export interface SummaryResponse {
     modelBreakdown: ModelBreakdownItem[]
     timeSeries: SummaryTimeSeriesPoint[]
     modelTimeSeries: ModelTimeSeriesPoint[]
+    syncStatus: {
+      isSyncing: boolean
+      lastCompletedSyncTime: string | null
+      nextSyncTime: string | null
+      syncIntervalHours: number
+    }
   }
   error?: string
 }

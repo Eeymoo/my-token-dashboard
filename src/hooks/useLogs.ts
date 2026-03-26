@@ -56,29 +56,6 @@ export function useModels() {
   })
 }
 
-// 手动触发同步
-export function useSync() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async (force?: boolean) => {
-      const response = await axios.get('/api/sync', {
-        params: { force },
-        headers: {
-          Authorization: `Bearer ${process.env.NEXT_PUBLIC_ADMIN_KEY || 'default-admin-key'}`,
-        },
-      })
-      return response.data
-    },
-    onSuccess: () => {
-      // 使相关查询失效，重新获取数据
-      queryClient.invalidateQueries({ queryKey: ['logs'] })
-      queryClient.invalidateQueries({ queryKey: ['summary'] })
-      queryClient.invalidateQueries({ queryKey: ['models'] })
-    },
-  })
-}
-
 // 添加日志（测试用）
 export function useAddLog() {
   const queryClient = useQueryClient()
