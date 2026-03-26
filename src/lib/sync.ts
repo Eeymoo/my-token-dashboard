@@ -225,7 +225,7 @@ class DataSync {
   private async getLastSyncTime(): Promise<string | null> {
     try {
       const result = await query(
-        "SELECT value FROM sync_metadata WHERE key = 'last_sync_time'"
+        "SELECT `value` FROM sync_metadata WHERE `key` = 'last_sync_time'"
       ) as any[]
 
       if (result.length > 0) {
@@ -236,8 +236,8 @@ class DataSync {
       await query(`
         CREATE TABLE IF NOT EXISTS sync_metadata (
           id INT AUTO_INCREMENT PRIMARY KEY,
-          key VARCHAR(100) UNIQUE NOT NULL,
-          value TEXT,
+          \`key\` VARCHAR(100) UNIQUE NOT NULL,
+          \`value\` TEXT,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
       `)
@@ -253,8 +253,8 @@ class DataSync {
   private async updateLastSyncTime(time: string) {
     try {
       await query(
-        "INSERT INTO sync_metadata (key, value) VALUES ('last_sync_time', ?) " +
-        "ON DUPLICATE KEY UPDATE value = ?",
+        "INSERT INTO sync_metadata (`key`, `value`) VALUES ('last_sync_time', ?) " +
+        "ON DUPLICATE KEY UPDATE `value` = ?",
         [time, time]
       )
     } catch (error) {
@@ -294,6 +294,11 @@ class DataSync {
       month: 'MONTH',
     }
 
+    const format = periodType === 'hour' ? '%Y-%m-%d %H:00:00' :
+                  periodType === 'day' ? '%Y-%m-%d 00:00:00' :
+                  periodType === 'week' ? '%Y-%u 00:00:00' :
+                  '%Y-%m-01 00:00:00'
+
     const sql = `
       INSERT INTO aggregated_data (
         period_type, period_start, period_end, model_id,
@@ -301,18 +306,29 @@ class DataSync {
       )
       SELECT
         ? as period_type,
-        DATE_FORMAT(timestamp, ?) as period_start,
-        DATE_FORMAT(DATE_ADD(timestamp, INTERVAL 1 ${periodMap[periodType]}), ?) as period_end,
-        model_id,
-        SUM(total_tokens) as total_tokens,
-        SUM(total_cost) as total_cost,
-        SUM(request_count) as request_count,
-        SUM(success_count) as success_count,
-        SUM(error_count) as error_count,
-        AVG(avg_latency) as avg_latency
-      FROM api_logs
-      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-      GROUP BY period_start, model_id
+        grouped.period_start,
+        DATE_FORMAT(DATE_ADD(grouped.period_start, INTERVAL 1 ${periodMap[periodType]}), ?) as period_end,
+        grouped.model_id,
+        grouped.total_tokens,
+        grouped.total_cost,
+        grouped.request_count,
+        grouped.success_count,
+        grouped.error_count,
+        grouped.avg_latency
+      FROM (
+        SELECT
+          STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s') as period_start,
+          model_id,
+          SUM(total_tokens) as total_tokens,
+          SUM(total_cost) as total_cost,
+          SUM(request_count) as request_count,
+          SUM(success_count) as success_count,
+          SUM(error_count) as error_count,
+          AVG(avg_latency) as avg_latency
+        FROM api_logs
+        WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+        GROUP BY STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s'), model_id
+      ) grouped
       ON DUPLICATE KEY UPDATE
         total_tokens = VALUES(total_tokens),
         total_cost = VALUES(total_cost),
@@ -323,12 +339,7 @@ class DataSync {
         updated_at = CURRENT_TIMESTAMP
     `
 
-    const format = periodType === 'hour' ? '%Y-%m-%d %H:00:00' :
-                  periodType === 'day' ? '%Y-%m-%d 00:00:00' :
-                  periodType === 'week' ? '%Y-%u 00:00:00' :
-                  '%Y-%m-01 00:00:00'
-
-    await query(sql, [periodType, format, format])
+    await query(sql, [periodType, format, format, format])
     console.log(`✅ ${periodType}聚合完成`)
   }
 
