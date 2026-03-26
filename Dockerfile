@@ -33,7 +33,6 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 # 从 builder 阶段复制必要文件
-COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 
 # 设置正确的权限并复制 .next 目录
