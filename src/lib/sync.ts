@@ -147,93 +147,110 @@ class DataSync {
 
   // 将日志转换为数据库格式
   private transformLogToDbFormat(log: any) {
-    const modelId = log.model?.modelId || log.model_id || log.model || log.model_name || 'unknown'
-    const modelName = log.model?.modelName || log.model_name || log.modelName || modelId || '未知模型'
-    const provider = log.model?.provider || log.provider || 'unknown'
-    const category = log.model?.category || log.category || 'text'
-    const userId = log.user?.userId || log.user_id || log.userId
-    const userName = log.user?.userName || log.username || log.user_name || log.userName
-    const teamId = log.user?.teamId || log.team_id || log.teamId
+    const toNullableString = (value: any, fallback: string | null = null) => {
+      if (value === null || value === undefined) return fallback
+      const str = String(value).trim()
+      return str.length > 0 ? str : fallback
+    }
+
+    const toNumberOr = (value: any, fallback: number) => {
+      const num = Number(value)
+      return Number.isFinite(num) ? num : fallback
+    }
+
+    const modelId = toNullableString(log.model?.modelId || log.model_id || log.model || log.model_name, 'unknown')!
+    const modelName = toNullableString(log.model?.modelName || log.model_name || log.modelName || modelId, '未知模型')!
+    const provider = toNullableString(log.model?.provider || log.provider, 'unknown')!
+    const category = toNullableString(log.model?.category || log.category, 'text')!
+    const userId = toNullableString(log.user?.userId || log.user_id || log.userId)
+    const userName = toNullableString(log.user?.userName || log.username || log.user_name || log.userName)
+    const teamId = toNullableString(log.user?.teamId || log.team_id || log.teamId)
 
     const fallbackTotalTokens =
-      (Number(log.prompt_tokens ?? log.promptTokens ?? 0) || 0) +
-      (Number(log.completion_tokens ?? log.completionTokens ?? 0) || 0)
+      toNumberOr(log.prompt_tokens ?? log.promptTokens, 0) +
+      toNumberOr(log.completion_tokens ?? log.completionTokens, 0)
 
-    const totalTokens = Number(
+    const totalTokens = toNumberOr(
       log.tokens?.totalTokens ??
       log.total_tokens ??
       log.totalTokens ??
       log.usage ??
-      fallbackTotalTokens
-    ) || 0
+      fallbackTotalTokens,
+      0
+    )
 
-    const promptTokens = Number(
+    const promptTokens = toNumberOr(
       log.tokens?.promptTokens ??
       log.prompt_tokens ??
-      log.promptTokens ??
+      log.promptTokens,
       0
-    ) || 0
+    )
 
-    const completionTokens = Number(
+    const completionTokens = toNumberOr(
       log.tokens?.completionTokens ??
       log.completion_tokens ??
-      log.completionTokens ??
+      log.completedTokens ??
+      log.completionTokens,
       0
-    ) || 0
+    )
 
-    const totalCost = Number(
+    const totalCost = toNumberOr(
       log.cost?.totalCost ??
       log.total_cost ??
       log.totalCost ??
-      log.quota ??
+      log.quota,
       0
-    ) || 0
+    )
 
-    const promptCost = Number(
+    const promptCost = toNumberOr(
       log.cost?.promptCost ??
       log.prompt_cost ??
-      log.promptCost ??
+      log.promptCost,
       0
-    ) || 0
+    )
 
-    const completionCost = Number(
+    const completionCost = toNumberOr(
       log.cost?.completionCost ??
       log.completion_cost ??
-      log.completionCost ??
+      log.completionCost,
       0
-    ) || 0
+    )
 
-    const requestCount = Number(
+    const requestCount = Math.max(1, toNumberOr(
       log.requests?.requestCount ??
       log.request_count ??
-      log.requestCount ??
+      log.requestCount,
       1
-    ) || 1
+    ))
 
-    const successCount = Number(
+    const successCount = toNumberOr(
       log.requests?.successCount ??
       log.success_count ??
       log.successCount ??
-      ((log.code || log.status_code || log.statusCode || 200) < 400 ? requestCount : 0)
-    ) || 0
+      ((log.code || log.status_code || log.statusCode || 200) < 400 ? requestCount : 0),
+      0
+    )
 
-    const errorCount = Number(
+    const errorCount = toNumberOr(
       log.requests?.errorCount ??
       log.error_count ??
       log.errorCount ??
-      ((log.code || log.status_code || log.statusCode || 200) >= 400 ? requestCount : 0)
-    ) || 0
+      ((log.code || log.status_code || log.statusCode || 200) >= 400 ? requestCount : 0),
+      0
+    )
 
-    const avgLatency = log.requests?.avgLatency ?? log.latency ?? log.avg_latency ?? log.avgLatency ?? log.use_time ?? null
+    const avgLatencyRaw = log.requests?.avgLatency ?? log.latency ?? log.avg_latency ?? log.avgLatency ?? log.use_time
+    const avgLatency = Number.isFinite(Number(avgLatencyRaw)) ? Number(avgLatencyRaw) : null
     const timestamp = typeof log.created_at === 'number'
       ? dayjs.unix(log.created_at).toISOString()
-      : log.timestamp || log.created_at || log.createdAt || new Date().toISOString()
+      : toNullableString(log.timestamp || log.created_at || log.createdAt, new Date().toISOString())!
     const endpoint = (() => {
-      if (log.endpoint || log.path) return log.endpoint || log.path
+      const direct = toNullableString(log.endpoint || log.path)
+      if (direct) return direct
       if (typeof log.other === 'string') {
         try {
           const parsed = JSON.parse(log.other)
-          return parsed.request_path || '/api/unknown'
+          return toNullableString(parsed.request_path, '/api/unknown')!
         } catch {
           return '/api/unknown'
         }
@@ -242,7 +259,7 @@ class DataSync {
     })()
 
     return {
-      logId: log.logId || log.id || log.log_id || log.request_id || `log_${Date.now()}_${Math.random()}`,
+      logId: toNullableString(log.logId || log.id || log.log_id || log.request_id, `log_${Date.now()}_${Math.random()}`)!,
       timestamp,
       modelId,
       modelName,
@@ -262,7 +279,7 @@ class DataSync {
       errorCount,
       avgLatency,
       endpoint,
-      statusCode: log.statusCode || log.status_code || log.code || 200,
+      statusCode: toNumberOr(log.statusCode || log.status_code || log.code, 200),
     }
   }
 
