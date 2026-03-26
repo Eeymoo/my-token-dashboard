@@ -86,6 +86,7 @@ npm start
 # New API 配置
 NEW_API_BASE_URL=https://new-api.onemue.cn/
 NEW_API_KEY=您的API密钥
+NEW_API_USER=当前登录用户的 user_id
 
 # 数据库配置（运行时读取，不会被构建阶段写死）
 DATABASE_HOST=localhost
@@ -99,6 +100,8 @@ ADMIN_API_KEY=设置一个管理密钥
 ```
 
 > ⚠️ **注意**：Next.js 服务端代码（包括 `/api/logs/summary`、同步任务等）会在运行时直接读取上述 DATABASE_* 变量。如果通过 `docker-compose` 运行，容器内会自动注入 `DATABASE_HOST=mysql`；在本机直接 `npm run dev` 或 `npm start` 时，请手动把 `DATABASE_HOST` 配置成可以访问 MySQL 的地址（例如 `127.0.0.1`），否则会连到默认的 IPv6 `::1:3306` 而失败。
+>
+> New API 日志管理接口除了系统访问令牌外，还需要 `NEW_API_USER`（当前登录用户的 `user_id`）。`NEW_API_KEY` 与 `NEW_API_USER` 必须对应同一用户身份，否则同步会被上游拒绝。
 
 ### 可选配置
 ```env
