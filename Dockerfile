@@ -29,6 +29,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Runtime defaults for database connectivity (overridable via docker run -e)
+ENV DATABASE_HOST=localhost \
+    DATABASE_PORT=3306 \
+    DATABASE_USER=username \
+    DATABASE_PASSWORD=password \
+    DATABASE_NAME=ai_token_dashboard
+
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
