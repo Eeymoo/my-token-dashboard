@@ -44,25 +44,17 @@ apiClient.interceptors.response.use(
 // 获取日志数据
 export async function fetchLogs(params: LogQueryParams): Promise<LogQueryResponse> {
   try {
-    // 根据 New API 文档，日志查询端点是 GET /api/log/
-    // 但实际需要根据 API 文档调整
     const response = await apiClient.get('/api/log/', {
       params: {
+        page: params.page || 1,
         p: params.page || 1,
         page_size: params.pageSize || 100,
-        // 其他参数根据 API 文档调整
+        start_timestamp: `${params.startDate} 00:00:00`,
+        end_timestamp: `${params.endDate} 23:59:59`,
+        model_name: params.models?.length ? params.models.join(',') : undefined,
       },
     })
 
-    // 这里需要根据实际 API 响应格式转换
-    // 假设响应格式如下：
-    // {
-    //   success: true,
-    //   data: {
-    //     logs: [...],
-    //     pagination: {...}
-    //   }
-    // }
     return response.data
   } catch (error) {
     console.error('获取日志数据失败:', error)

@@ -117,42 +117,107 @@ class DataSync {
 
   // 将日志转换为数据库格式
   private transformLogToDbFormat(log: any) {
-    // 这里需要根据实际的 API 响应格式调整
-    // 假设 log 包含以下字段：
-    // {
-    //   logId: string,
-    //   timestamp: string,
-    //   model: { modelId, modelName, provider, category },
-    //   user: { userId, userName, teamId },
-    //   tokens: { totalTokens, promptTokens, completionTokens },
-    //   cost: { totalCost, promptCost, completionCost },
-    //   requests: { requestCount, successCount, errorCount, avgLatency },
-    //   endpoint: string,
-    //   statusCode: number
-    // }
+    const modelId = log.model?.modelId || log.model_id || log.model || log.model_name || 'unknown'
+    const modelName = log.model?.modelName || log.model_name || log.modelName || modelId || '未知模型'
+    const provider = log.model?.provider || log.provider || 'unknown'
+    const category = log.model?.category || log.category || 'text'
+    const userId = log.user?.userId || log.user_id || log.userId
+    const userName = log.user?.userName || log.username || log.user_name || log.userName
+    const teamId = log.user?.teamId || log.team_id || log.teamId
+
+    const fallbackTotalTokens =
+      (Number(log.prompt_tokens ?? log.promptTokens ?? 0) || 0) +
+      (Number(log.completion_tokens ?? log.completionTokens ?? 0) || 0)
+
+    const totalTokens = Number(
+      log.tokens?.totalTokens ??
+      log.total_tokens ??
+      log.totalTokens ??
+      log.usage ??
+      fallbackTotalTokens
+    ) || 0
+
+    const promptTokens = Number(
+      log.tokens?.promptTokens ??
+      log.prompt_tokens ??
+      log.promptTokens ??
+      0
+    ) || 0
+
+    const completionTokens = Number(
+      log.tokens?.completionTokens ??
+      log.completion_tokens ??
+      log.completionTokens ??
+      0
+    ) || 0
+
+    const totalCost = Number(
+      log.cost?.totalCost ??
+      log.total_cost ??
+      log.totalCost ??
+      log.quota ??
+      0
+    ) || 0
+
+    const promptCost = Number(
+      log.cost?.promptCost ??
+      log.prompt_cost ??
+      log.promptCost ??
+      0
+    ) || 0
+
+    const completionCost = Number(
+      log.cost?.completionCost ??
+      log.completion_cost ??
+      log.completionCost ??
+      0
+    ) || 0
+
+    const requestCount = Number(
+      log.requests?.requestCount ??
+      log.request_count ??
+      log.requestCount ??
+      1
+    ) || 1
+
+    const successCount = Number(
+      log.requests?.successCount ??
+      log.success_count ??
+      log.successCount ??
+      ((log.code || log.status_code || log.statusCode || 200) < 400 ? requestCount : 0)
+    ) || 0
+
+    const errorCount = Number(
+      log.requests?.errorCount ??
+      log.error_count ??
+      log.errorCount ??
+      ((log.code || log.status_code || log.statusCode || 200) >= 400 ? requestCount : 0)
+    ) || 0
+
+    const avgLatency = log.requests?.avgLatency ?? log.latency ?? log.avg_latency ?? log.avgLatency ?? null
 
     return {
-      logId: log.logId || `log_${Date.now()}_${Math.random()}`,
-      timestamp: log.timestamp || new Date().toISOString(),
-      modelId: log.model?.modelId || 'unknown',
-      modelName: log.model?.modelName || '未知模型',
-      provider: log.model?.provider || 'unknown',
-      category: log.model?.category || 'text',
-      userId: log.user?.userId,
-      userName: log.user?.userName,
-      teamId: log.user?.teamId,
-      totalTokens: log.tokens?.totalTokens || 0,
-      promptTokens: log.tokens?.promptTokens || 0,
-      completionTokens: log.tokens?.completionTokens || 0,
-      totalCost: log.cost?.totalCost || 0,
-      promptCost: log.cost?.promptCost || 0,
-      completionCost: log.cost?.completionCost || 0,
-      requestCount: log.requests?.requestCount || 1,
-      successCount: log.requests?.successCount || 1,
-      errorCount: log.requests?.errorCount || 0,
-      avgLatency: log.requests?.avgLatency,
-      endpoint: log.endpoint || '/api/unknown',
-      statusCode: log.statusCode || 200,
+      logId: log.logId || log.id || log.log_id || `log_${Date.now()}_${Math.random()}`,
+      timestamp: log.timestamp || log.created_at || log.createdAt || new Date().toISOString(),
+      modelId,
+      modelName,
+      provider,
+      category,
+      userId,
+      userName,
+      teamId,
+      totalTokens,
+      promptTokens,
+      completionTokens,
+      totalCost,
+      promptCost,
+      completionCost,
+      requestCount,
+      successCount,
+      errorCount,
+      avgLatency,
+      endpoint: log.endpoint || log.path || '/api/unknown',
+      statusCode: log.statusCode || log.status_code || log.code || 200,
     }
   }
 
