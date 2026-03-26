@@ -7,18 +7,25 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams
     const startDate = searchParams.get('startDate') || '2026-01-01'
     const endDate = searchParams.get('endDate') || dayjs().format('YYYY-MM-DD')
-    const models = searchParams.get('models')?.split(',') || []
+    const modelsParam = searchParams.get('models')
+    const models = modelsParam
+      ? modelsParam
+          .split(',')
+          .map((model) => model.trim())
+          .filter((model) => model.length > 0)
+      : []
     const page = parseInt(searchParams.get('page') || '1')
     const pageSize = parseInt(searchParams.get('pageSize') || '100')
     const offset = (page - 1) * pageSize
 
     // 构建查询条件
     let whereClause = 'WHERE timestamp BETWEEN ? AND ?'
-    const queryParams: any[] = [startDate, endDate]
+    const queryParams: any[] = [`${startDate} 00:00:00`, `${endDate} 23:59:59`]
 
     if (models.length > 0) {
-      whereClause += ' AND model_id IN (?)'
-      queryParams.push(models)
+      const placeholders = models.map(() => '?').join(', ')
+      whereClause += ` AND model_id IN (${placeholders})`
+      queryParams.push(...models)
     }
 
     // 获取总记录数

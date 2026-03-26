@@ -8,15 +8,19 @@ export async function GET(_request: NextRequest) {
     const searchParams = _request.nextUrl.searchParams
     const startDate = searchParams.get('startDate') || '2026-01-01'
     const endDate = searchParams.get('endDate') || new Date().toISOString().split('T')[0]
-    const models = searchParams.get('models')?.split(',') || []
+    const models = (searchParams.get('models') || '')
+      .split(',')
+      .map((model) => model.trim())
+      .filter(Boolean)
 
     // 构建查询条件
     let whereClause = 'WHERE timestamp BETWEEN ? AND ?'
-    const queryParams: any[] = [startDate, endDate]
+    const queryParams: any[] = [`${startDate} 00:00:00`, `${endDate} 23:59:59`]
 
     if (models.length > 0) {
-      whereClause += ' AND model_id IN (?)'
-      queryParams.push(models)
+      const placeholders = models.map(() => '?').join(', ')
+      whereClause += ` AND model_id IN (${placeholders})`
+      queryParams.push(...models)
     }
 
     // 获取总览数据
