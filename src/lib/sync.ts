@@ -403,8 +403,11 @@ class DataSync {
 
     const format = periodType === 'hour' ? '%Y-%m-%d %H:00:00' :
                   periodType === 'day' ? '%Y-%m-%d 00:00:00' :
-                  periodType === 'week' ? '%Y-%u 00:00:00' :
                   '%Y-%m-01 00:00:00'
+
+    const periodStartExpression = periodType === 'week'
+      ? "DATE_SUB(DATE(timestamp), INTERVAL WEEKDAY(timestamp) DAY)"
+      : "STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s')"
 
     const sql = `
       INSERT INTO aggregated_data (
@@ -424,7 +427,7 @@ class DataSync {
         grouped.avg_latency
       FROM (
         SELECT
-          STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s') as period_start,
+          ${periodStartExpression} as period_start,
           model_id,
           SUM(total_tokens) as total_tokens,
           SUM(total_cost) as total_cost,
@@ -434,7 +437,7 @@ class DataSync {
           AVG(avg_latency) as avg_latency
         FROM api_logs
         WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-        GROUP BY STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s'), model_id
+        GROUP BY ${periodStartExpression}, model_id
       ) grouped
       ON DUPLICATE KEY UPDATE
         total_tokens = VALUES(total_tokens),
@@ -446,7 +449,11 @@ class DataSync {
         updated_at = CURRENT_TIMESTAMP
     `
 
-    await query(sql, [periodType, format, format, format])
+    const params = periodType === 'week'
+      ? [periodType, format]
+      : [periodType, format, format, format]
+
+    await query(sql, params)
     console.log(`✅ ${periodType}聚合完成`)
   }
 
