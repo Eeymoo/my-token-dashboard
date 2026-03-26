@@ -8,6 +8,7 @@ class DataSync {
   private isSyncing = false
   private lastSyncTime: Date | null = null
   private metadataTableReady = false
+  private scheduledTask: cron.ScheduledTask | null = null
 
   private getSyncIntervalHours() {
     return Math.max(1, parseInt(process.env.SYNC_INTERVAL_HOURS || '1'))
@@ -476,6 +477,12 @@ class DataSync {
 
     if (intervalHours <= 0) {
       console.log('⏸️  定时同步已禁用')
+      this.stopScheduledSync()
+      return
+    }
+
+    if (this.scheduledTask) {
+      console.log('ℹ️ 定时同步任务已存在，跳过重复启动')
       return
     }
 
@@ -484,14 +491,27 @@ class DataSync {
 
     console.log(`⏰ 设置定时同步: ${cronExpression} (每 ${intervalHours} 小时)`)
 
-    cron.schedule(cronExpression, () => {
+    this.scheduledTask = cron.schedule(cronExpression, () => {
       console.log('⏰ 定时同步任务触发')
-      this.syncData()
+      this.syncData().catch(error => {
+        console.error('定时同步执行失败:', error)
+      })
     })
 
     // 立即执行一次同步
     console.log('🚀 立即执行首次同步...')
-    this.syncData()
+    this.syncData().catch(error => {
+      console.error('首次定时同步执行失败:', error)
+    })
+  }
+
+  stopScheduledSync() {
+    if (!this.scheduledTask) {
+      return
+    }
+
+    this.scheduledTask.stop()
+    this.scheduledTask = null
   }
 }
 
