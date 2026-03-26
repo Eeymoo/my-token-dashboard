@@ -197,8 +197,7 @@ class DataSync {
     const totalCost = toNumberOr(
       log.cost?.totalCost ??
       log.total_cost ??
-      log.totalCost ??
-      log.quota,
+      log.totalCost,
       0
     )
 
