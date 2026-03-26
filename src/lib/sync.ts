@@ -7,6 +7,7 @@ import dayjs from 'dayjs'
 class DataSync {
   private isSyncing = false
   private lastSyncTime: Date | null = null
+  private metadataTableReady = false
 
   // 初始化同步器
   async initialize() {
@@ -22,6 +23,7 @@ class DataSync {
     // 初始化数据库表
     try {
       await initDatabase()
+      await this.ensureMetadataTable()
     } catch (error) {
       console.error('❌ 数据库表初始化失败:', error)
       return false
@@ -67,12 +69,18 @@ class DataSync {
           pageSize,
         })
 
-        if (!response.success || !response.data?.logs?.length) {
+        if (!response?.success) {
+          console.log('⚠️ API 响应失败或格式异常，停止同步')
+          break
+        }
+
+        const logs = response.data.logs || []
+
+        if (logs.length === 0) {
           console.log('✅ 数据获取完成')
           break
         }
 
-        const logs = response.data.logs
         console.log(`📥 获取到 ${logs.length} 条日志`)
 
         // 处理并存储日志
@@ -87,32 +95,54 @@ class DataSync {
           }
         }
 
-        // 检查是否还有更多数据
-        const pagination = response.data.pagination
-        if (!pagination || page >= pagination.totalPages) {
+        const currentPage = Number(response.data.pagination.page || page)
+        const totalPages = Number(response.data.pagination.totalPages || 0)
+
+        if (!totalPages || currentPage >= totalPages) {
           break
         }
 
-        page++
-        // 避免请求过于频繁
-        await this.delay(1000)
-      }
-
-      // 更新最后同步时间
-      await this.updateLastSyncTime(endDate)
-
-      const duration = Date.now() - startTime
-      console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
-
-      // 触发数据聚合
-      await this.aggregateData()
-
-    } catch (error) {
-      console.error('❌ 数据同步失败:', error)
-    } finally {
-      this.isSyncing = false
-      this.lastSyncTime = new Date()
+        page = currentPage + 1
+      // 避免请求过于频繁
+      await this.delay(1000)
     }
+
+    // 更新最后同步时间
+    await this.updateLastSyncTime(endDate)
+
+    const duration = Date.now() - startTime
+    console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
+
+    // 触发数据聚合
+    try {
+      await this.ensureMetadataTable()
+      await this.aggregateData()
+    } catch (aggError) {
+      console.error('❌ 数据聚合失败:', aggError)
+    }
+
+  } catch (error) {
+    console.error('❌ 数据同步失败:', error)
+  } finally {
+    this.isSyncing = false
+    this.lastSyncTime = new Date()
+  }
+}
+
+
+  private async ensureMetadataTable() {
+    if (this.metadataTableReady) return
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS sync_metadata (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        \`key\` VARCHAR(100) UNIQUE NOT NULL,
+        \`value\` TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `)
+
+    this.metadataTableReady = true
   }
 
   // 将日志转换为数据库格式
@@ -194,11 +224,26 @@ class DataSync {
       ((log.code || log.status_code || log.statusCode || 200) >= 400 ? requestCount : 0)
     ) || 0
 
-    const avgLatency = log.requests?.avgLatency ?? log.latency ?? log.avg_latency ?? log.avgLatency ?? null
+    const avgLatency = log.requests?.avgLatency ?? log.latency ?? log.avg_latency ?? log.avgLatency ?? log.use_time ?? null
+    const timestamp = typeof log.created_at === 'number'
+      ? dayjs.unix(log.created_at).toISOString()
+      : log.timestamp || log.created_at || log.createdAt || new Date().toISOString()
+    const endpoint = (() => {
+      if (log.endpoint || log.path) return log.endpoint || log.path
+      if (typeof log.other === 'string') {
+        try {
+          const parsed = JSON.parse(log.other)
+          return parsed.request_path || '/api/unknown'
+        } catch {
+          return '/api/unknown'
+        }
+      }
+      return '/api/unknown'
+    })()
 
     return {
-      logId: log.logId || log.id || log.log_id || `log_${Date.now()}_${Math.random()}`,
-      timestamp: log.timestamp || log.created_at || log.createdAt || new Date().toISOString(),
+      logId: log.logId || log.id || log.log_id || log.request_id || `log_${Date.now()}_${Math.random()}`,
+      timestamp,
       modelId,
       modelName,
       provider,
@@ -216,7 +261,7 @@ class DataSync {
       successCount,
       errorCount,
       avgLatency,
-      endpoint: log.endpoint || log.path || '/api/unknown',
+      endpoint,
       statusCode: log.statusCode || log.status_code || log.code || 200,
     }
   }
@@ -224,6 +269,7 @@ class DataSync {
   // 获取上次同步时间
   private async getLastSyncTime(): Promise<string | null> {
     try {
+      await this.ensureMetadataTable()
       const result = await query(
         "SELECT `value` FROM sync_metadata WHERE `key` = 'last_sync_time'"
       ) as any[]
@@ -231,16 +277,6 @@ class DataSync {
       if (result.length > 0) {
         return result[0].value
       }
-
-      // 如果表不存在，创建它
-      await query(`
-        CREATE TABLE IF NOT EXISTS sync_metadata (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          \`key\` VARCHAR(100) UNIQUE NOT NULL,
-          \`value\` TEXT,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        )
-      `)
 
       return null
     } catch (error) {
@@ -252,6 +288,7 @@ class DataSync {
   // 更新最后同步时间
   private async updateLastSyncTime(time: string) {
     try {
+      await this.ensureMetadataTable()
       await query(
         "INSERT INTO sync_metadata (`key`, `value`) VALUES ('last_sync_time', ?) " +
         "ON DUPLICATE KEY UPDATE `value` = ?",
@@ -267,6 +304,8 @@ class DataSync {
     console.log('🧮 开始数据聚合...')
 
     try {
+      await query("SET SESSION sql_mode = REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY', '')")
+
       // 按小时聚合
       await this.aggregateByPeriod('hour')
 

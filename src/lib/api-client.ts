@@ -41,21 +41,87 @@ apiClient.interceptors.response.use(
   }
 )
 
+function normalizeLogResponse(raw: any, params: LogQueryParams): LogQueryResponse {
+  const payload = raw || {}
+  const data = payload.data || {}
+  const paginationSource = data.pagination || {}
+  const items = Array.isArray(data.items) ? data.items : Array.isArray(data.logs) ? data.logs : []
+
+  const page = Number(
+    paginationSource.page ??
+    paginationSource.current ??
+    data.page ??
+    data.current ??
+    params.page ??
+    1
+  ) || 1
+
+  const pageSize = Number(
+    paginationSource.pageSize ??
+    paginationSource.page_size ??
+    data.pageSize ??
+    data.page_size ??
+    params.pageSize ??
+    100
+  ) || 100
+
+  const total = Number(
+    paginationSource.total ??
+    data.total ??
+    paginationSource.count ??
+    data.count ??
+    items.length
+  ) || 0
+
+  const totalPages = Number(
+    paginationSource.totalPages ??
+    paginationSource.total_pages ??
+    paginationSource.pages ??
+    data.total_pages ??
+    Math.ceil(total / (pageSize || 1))
+  ) || Math.max(1, Math.ceil(total / (pageSize || 1)))
+
+  const success = typeof payload.success === 'boolean'
+    ? payload.success
+    : payload.code === 0 || payload.code === undefined
+
+  return {
+    success,
+    data: {
+      logs: items,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+      },
+      summary: (
+        data.summary || {
+          totalTokens: 0,
+          totalCost: 0,
+          totalRequests: total,
+          modelBreakdown: [],
+        }
+      ),
+    },
+    error: payload.error,
+  }
+}
+
 // 获取日志数据
 export async function fetchLogs(params: LogQueryParams): Promise<LogQueryResponse> {
   try {
     const response = await apiClient.get('/api/log/', {
       params: {
         page: params.page || 1,
-        p: params.page || 1,
         page_size: params.pageSize || 100,
-        start_timestamp: `${params.startDate} 00:00:00`,
-        end_timestamp: `${params.endDate} 23:59:59`,
+        start_timestamp: params.startDate ? `${params.startDate} 00:00:00` : undefined,
+        end_timestamp: params.endDate ? `${params.endDate} 23:59:59` : undefined,
         model_name: params.models?.length ? params.models.join(',') : undefined,
       },
     })
 
-    return response.data
+    return normalizeLogResponse(response.data, params)
   } catch (error) {
     console.error('获取日志数据失败:', error)
     throw error
