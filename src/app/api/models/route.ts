@@ -35,16 +35,20 @@ export async function GET(_request: NextRequest) {
       category: row.category || 'text',
       description: row.description,
       isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
+      inputPrice: row.input_price_usd ?? row.inputPrice ?? null,
+      outputPrice: row.output_price_usd ?? row.outputPrice ?? null,
+      priceLastSource: row.price_last_source ?? null,
+      priceLastSyncedAt: row.price_last_synced_at ?? null,
     }))
 
     // 如果没有模型数据，返回默认模型列表
     if (models.length === 0) {
       models.push(
-        { modelId: 'gpt-4', modelName: 'GPT-4', provider: 'OpenAI', category: 'text', description: 'OpenAI的GPT-4模型，强大的文本生成能力', isActive: true },
-        { modelId: 'claude-3', modelName: 'Claude 3', provider: 'Anthropic', category: 'text', description: 'Anthropic的Claude 3模型，优秀的对话和推理能力', isActive: true },
-        { modelId: 'gemini-pro', modelName: 'Gemini Pro', provider: 'Google', category: 'text', description: 'Google的Gemini Pro模型，多模态AI模型', isActive: true },
-        { modelId: 'llama-2', modelName: 'Llama 2', provider: 'Meta', category: 'text', description: 'Meta的Llama 2开源大语言模型', isActive: true },
-        { modelId: 'dall-e-3', modelName: 'DALL-E 3', provider: 'OpenAI', category: 'image', description: 'OpenAI的DALL-E 3图像生成模型', isActive: true },
+        { modelId: 'gpt-4', modelName: 'GPT-4', provider: 'OpenAI', category: 'text', description: 'OpenAI的GPT-4模型，强大的文本生成能力', isActive: true, inputPrice: null, outputPrice: null, priceLastSource: null, priceLastSyncedAt: null },
+        { modelId: 'claude-3', modelName: 'Claude 3', provider: 'Anthropic', category: 'text', description: 'Anthropic的Claude 3模型，优秀的对话和推理能力', isActive: true, inputPrice: null, outputPrice: null, priceLastSource: null, priceLastSyncedAt: null },
+        { modelId: 'gemini-pro', modelName: 'Gemini Pro', provider: 'Google', category: 'text', description: 'Google的Gemini Pro模型，多模态AI模型', isActive: true, inputPrice: null, outputPrice: null, priceLastSource: null, priceLastSyncedAt: null },
+        { modelId: 'llama-2', modelName: 'Llama 2', provider: 'Meta', category: 'text', description: 'Meta的Llama 2开源大语言模型', isActive: true, inputPrice: null, outputPrice: null, priceLastSource: null, priceLastSyncedAt: null },
+        { modelId: 'dall-e-3', modelName: 'DALL-E 3', provider: 'OpenAI', category: 'image', description: 'OpenAI的DALL-E 3图像生成模型', isActive: true, inputPrice: null, outputPrice: null, priceLastSource: null, priceLastSyncedAt: null },
       )
     }
 

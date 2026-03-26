@@ -2,6 +2,7 @@ import cron from 'node-cron'
 import { fetchLogs } from './api-client'
 import { insertLog, query, initDatabase, testConnection } from './db'
 import dayjs from 'dayjs'
+import { syncModelPrices } from './model-pricing'
 
 // 数据同步器类
 class DataSync {
@@ -125,6 +126,16 @@ class DataSync {
       try {
         await this.ensureMetadataTable()
         await this.aggregateData()
+
+      try {
+        const priceResult = await syncModelPrices()
+        console.log(
+          '💰 模型价格同步完成:',
+          `更新 ${priceResult.updatedModels}/${priceResult.totalModels}, 来源 ${priceResult.source}, fetchedAt ${priceResult.fetchedAt}, cache=${priceResult.usedCache}`
+        )
+      } catch (priceError) {
+        console.error('❌ 模型价格同步失败，保留旧价格:', priceError)
+      }
       } catch (aggError) {
         console.error('❌ 数据聚合失败:', aggError)
       }
