@@ -8,6 +8,7 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${process.env.NEW_API_KEY || 'xmCgDsePJkpnrhsFmbp2SnqhiS8i'}`,
+    'New-Api-User': process.env.NEW_API_USER || '',
   },
 })
 
