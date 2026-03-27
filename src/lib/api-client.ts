@@ -115,8 +115,8 @@ export async function fetchLogs(params: LogQueryParams): Promise<LogQueryRespons
       params: {
         page: params.page || 1,
         page_size: params.pageSize || 100,
-        start_timestamp: params.startDate ? `${params.startDate} 00:00:00` : undefined,
-        end_timestamp: params.endDate ? `${params.endDate} 23:59:59` : undefined,
+        start_timestamp: (params as any).startTimestamp || (params.startDate ? `${params.startDate} 00:00:00` : undefined),
+        end_timestamp: (params as any).endTimestamp || (params.endDate ? `${params.endDate} 23:59:59` : undefined),
         model_name: params.models?.length ? params.models.join(',') : undefined,
       },
     })

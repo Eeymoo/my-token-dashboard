@@ -74,6 +74,8 @@ export interface LogQueryParams {
   cumulative?: boolean // 是否返回累计数据
   page?: number
   pageSize?: number
+  startTimestamp?: string // 精确起始时间（可选）
+  endTimestamp?: string // 精确结束时间（可选）
 }
 
 // ==================== API 响应 ====================

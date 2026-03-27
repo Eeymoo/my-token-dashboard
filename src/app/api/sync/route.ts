@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import dataSync from '@/lib/sync'
 
-// 简单的 API 密钥验证
 function validateApiKey(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -15,7 +14,6 @@ function validateApiKey(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  // 验证 API 密钥
   if (!validateApiKey(request)) {
     return NextResponse.json(
       { success: false, error: '未授权访问' },
@@ -25,11 +23,33 @@ export async function GET(request: NextRequest) {
 
   try {
     const force = request.nextUrl.searchParams.get('force') === 'true'
+    const fullSync = request.nextUrl.searchParams.get('fullSync') === 'true'
+    const rebuild = request.nextUrl.searchParams.get('rebuild') === 'true'
+    const startDate = request.nextUrl.searchParams.get('startDate')
+    const endDate = request.nextUrl.searchParams.get('endDate')
 
-    // 如果强制同步或没有正在进行的同步，则执行同步
+    if (rebuild) {
+      if (!startDate || !endDate) {
+        return NextResponse.json(
+          { success: false, error: '重建派生数据需要 startDate 和 endDate' },
+          { status: 400 }
+        )
+      }
+
+      dataSync.rebuildDerivedData(startDate, endDate).catch((error) => {
+        console.error('重建派生数据失败:', error)
+      })
+
+      return NextResponse.json({
+        success: true,
+        message: '后台重建任务已开始',
+        isSyncing: dataSync.getIsSyncingPublic(),
+        lastSyncTime: dataSync.getLastSyncTimePublic(),
+      })
+    }
+
     if (force || !dataSync.getIsSyncingPublic()) {
-      // 异步执行同步，不等待完成
-      dataSync.syncData().catch(error => {
+      dataSync.syncData({ fullSync }).catch(error => {
         console.error('同步执行失败:', error)
       })
 
@@ -39,15 +59,14 @@ export async function GET(request: NextRequest) {
         isSyncing: true,
         lastSyncTime: dataSync.getLastSyncTimePublic(),
       })
-    } else {
-      return NextResponse.json({
-        success: true,
-        message: '同步已在运行中',
-        isSyncing: true,
-        lastSyncTime: dataSync.getLastSyncTimePublic(),
-      })
     }
 
+    return NextResponse.json({
+      success: true,
+      message: '同步已在运行中',
+      isSyncing: true,
+      lastSyncTime: dataSync.getLastSyncTimePublic(),
+    })
   } catch (error) {
     console.error('触发同步失败:', error)
     return NextResponse.json(
@@ -62,7 +81,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  // 验证 API 密钥
   if (!validateApiKey(request)) {
     return NextResponse.json(
       { success: false, error: '未授权访问' },
@@ -72,9 +90,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const immediate = body.immediate !== false // 默认立即执行
+    const immediate = body.immediate !== false
+    const fullSync = body.fullSync === true
 
-    // 初始化同步器
     const initialized = await dataSync.initialize()
     if (!initialized) {
       return NextResponse.json(
@@ -83,9 +101,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (body.rebuild) {
+      if (!body.startDate || !body.endDate) {
+        return NextResponse.json(
+          { success: false, error: '重建派生数据需要 startDate 和 endDate' },
+          { status: 400 }
+        )
+      }
+
+      await dataSync.rebuildDerivedData(body.startDate, body.endDate)
+
+      return NextResponse.json({
+        success: true,
+        message: '派生数据重建已完成',
+        isSyncing: false,
+        lastSyncTime: dataSync.getLastSyncTimePublic(),
+      })
+    }
+
     if (immediate) {
-      // 立即执行同步
-      await dataSync.syncData()
+      await dataSync.syncData({ fullSync })
 
       return NextResponse.json({
         success: true,
@@ -93,17 +128,15 @@ export async function POST(request: NextRequest) {
         isSyncing: false,
         lastSyncTime: dataSync.getLastSyncTimePublic(),
       })
-    } else {
-      // 启动定时同步
-      dataSync.startScheduledSync()
-
-      return NextResponse.json({
-        success: true,
-        message: '定时同步已启动',
-        isSyncing: false,
-      })
     }
 
+    dataSync.startScheduledSync()
+
+    return NextResponse.json({
+      success: true,
+      message: '定时同步已启动',
+      isSyncing: false,
+    })
   } catch (error) {
     console.error('配置同步失败:', error)
     return NextResponse.json(

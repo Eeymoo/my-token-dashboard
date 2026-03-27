@@ -1,5 +1,7 @@
 import mysql from 'mysql2/promise'
 
+export type AggregationPeriod = 'hour' | 'day' | 'week' | 'month'
+
 // 数据库连接配置
 const dbConfig = {
   host: process.env.DATABASE_HOST || 'localhost',
@@ -12,10 +14,8 @@ const dbConfig = {
   queueLimit: 0,
 }
 
-// 创建连接池
 const pool = mysql.createPool(dbConfig)
 
-// 测试数据库连接
 export async function testConnection() {
   let connection
   try {
@@ -30,12 +30,10 @@ export async function testConnection() {
   }
 }
 
-// 初始化数据库表
 export async function initDatabase() {
   const connection = await pool.getConnection()
 
   try {
-    // 创建日志表
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS api_logs (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -69,7 +67,6 @@ export async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `)
 
-    // 创建模型表
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS models (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -87,7 +84,6 @@ export async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `)
 
-    // 创建聚合数据表（按小时/天/周/月）
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS aggregated_data (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -119,10 +115,8 @@ export async function initDatabase() {
   }
 }
 
-// 导出连接池
 export { pool }
 
-// 通用查询函数
 export async function query(sql: string, params?: any[]) {
   const connection = await pool.getConnection()
   try {
@@ -133,7 +127,6 @@ export async function query(sql: string, params?: any[]) {
   }
 }
 
-// 插入日志记录
 export async function insertLog(log: any) {
   const sql = `
     INSERT INTO api_logs (
@@ -143,9 +136,26 @@ export async function insertLog(log: any) {
       error_count, avg_latency, endpoint, status_code
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
+      timestamp = VALUES(timestamp),
+      model_id = VALUES(model_id),
+      model_name = VALUES(model_name),
+      provider = VALUES(provider),
+      category = VALUES(category),
+      user_id = VALUES(user_id),
+      user_name = VALUES(user_name),
+      team_id = VALUES(team_id),
       total_tokens = VALUES(total_tokens),
+      prompt_tokens = VALUES(prompt_tokens),
+      completion_tokens = VALUES(completion_tokens),
       total_cost = VALUES(total_cost),
+      prompt_cost = VALUES(prompt_cost),
+      completion_cost = VALUES(completion_cost),
       request_count = VALUES(request_count),
+      success_count = VALUES(success_count),
+      error_count = VALUES(error_count),
+      avg_latency = VALUES(avg_latency),
+      endpoint = VALUES(endpoint),
+      status_code = VALUES(status_code),
       updated_at = CURRENT_TIMESTAMP
   `
 
@@ -174,4 +184,63 @@ export async function insertLog(log: any) {
   ]
 
   return query(sql, params)
+}
+
+export async function upsertAggregatedRange(
+  periodType: AggregationPeriod,
+  rangeStart: string,
+  rangeEnd: string
+) {
+  const periodMap = {
+    hour: 'HOUR',
+    day: 'DAY',
+    week: 'WEEK',
+    month: 'MONTH',
+  } as const
+
+  const format = periodType === 'hour' ? '%Y-%m-%d %H:00:00' :
+                periodType === 'day' ? '%Y-%m-%d 00:00:00' :
+                periodType === 'week' ? '%Y-%u 00:00:00' :
+                '%Y-%m-01 00:00:00'
+
+  await query(
+    `DELETE FROM aggregated_data
+     WHERE period_type = ?
+       AND period_start BETWEEN STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s') AND STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s')`,
+    [periodType, rangeStart, rangeEnd]
+  )
+
+  const sql = `
+    INSERT INTO aggregated_data (
+      period_type, period_start, period_end, model_id,
+      total_tokens, total_cost, request_count, success_count, error_count, avg_latency
+    )
+    SELECT
+      ? as period_type,
+      grouped.period_start,
+      DATE_FORMAT(DATE_ADD(grouped.period_start, INTERVAL 1 ${periodMap[periodType]}), ?) as period_end,
+      grouped.model_id,
+      grouped.total_tokens,
+      grouped.total_cost,
+      grouped.request_count,
+      grouped.success_count,
+      grouped.error_count,
+      grouped.avg_latency
+    FROM (
+      SELECT
+        STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s') as period_start,
+        model_id,
+        SUM(total_tokens) as total_tokens,
+        SUM(total_cost) as total_cost,
+        SUM(request_count) as request_count,
+        SUM(success_count) as success_count,
+        SUM(error_count) as error_count,
+        AVG(avg_latency) as avg_latency
+      FROM api_logs
+      WHERE timestamp BETWEEN STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s') AND STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s')
+      GROUP BY STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s'), model_id
+    ) grouped
+  `
+
+  return query(sql, [periodType, format, format, rangeStart, rangeEnd, format])
 }
