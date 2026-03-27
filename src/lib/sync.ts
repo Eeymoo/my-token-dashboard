@@ -17,22 +17,202 @@ type SyncOptions = {
   fullSync?: boolean
 }
 
+type SyncMode = 'incremental' | 'full' | 'rebuild'
+type SyncPhase = 'idle' | 'fetching' | 'processing' | 'completed' | 'failed'
+
+type SyncRuntimeState = {
+  isSyncing: boolean
+  phase: SyncPhase
+  mode: SyncMode
+  currentSyncStartedAt: Date | null
+  lastCompletedSyncTime: Date | null
+  lastProcessedTime: Date | null
+  lastSyncDurationMs: number | null
+  lastSyncItemCount: number | null
+  lastSyncError: string | null
+  nextSyncTime: Date | null
+  syncIntervalHours: number
+}
+
+type PersistedSyncState = {
+  lastCompletedSyncTime: Date | null
+  lastProcessedTime: Date | null
+  lastSyncDurationMs: number | null
+  lastSyncItemCount: number | null
+  lastSyncError: string | null
+  currentSyncStartedAt: Date | null
+  currentSyncMode: SyncMode
+  currentSyncPhase: SyncPhase
+}
+
 // 数据同步器类
 class DataSync {
   private isSyncing = false
   private lastSyncTime: Date | null = null
+  private currentSyncStartedAt: Date | null = null
+  private currentSyncMode: SyncMode = 'incremental'
+  private currentSyncPhase: SyncPhase = 'idle'
+  private lastSyncDurationMs: number | null = null
+  private lastSyncItemCount: number | null = null
+  private lastSyncError: string | null = null
+  private lastProcessedTime: Date | null = null
   private metadataTableReady = false
 
   private getSyncIntervalHours() {
     return Math.max(1, parseInt(process.env.SYNC_INTERVAL_HOURS || '1'))
   }
 
-  private getNextSyncTime(baseTime: Date | null = this.lastSyncTime) {
-    if (!baseTime) return null
-    return dayjs(baseTime).add(this.getSyncIntervalHours(), 'hour').toDate()
+  private parseDateValue(value: any): Date | null {
+    if (!value) return null
+    const parsed = dayjs(value)
+    return parsed.isValid() ? parsed.toDate() : null
   }
 
-  // 初始化同步器
+  private parseNumberValue(value: any): number | null {
+    if (value === null || value === undefined || value === '') return null
+    const num = Number(value)
+    return Number.isFinite(num) ? num : null
+  }
+
+  private normalizeSyncMode(value: any): SyncMode {
+    return value === 'full' || value === 'rebuild' ? value : 'incremental'
+  }
+
+  private normalizeSyncPhase(value: any): SyncPhase {
+    return value === 'fetching' || value === 'processing' || value === 'completed' || value === 'failed'
+      ? value
+      : 'idle'
+  }
+
+  private async getMetadataValue(key: string): Promise<string | null> {
+    await this.ensureMetadataTable()
+    const result = await query(
+      'SELECT `value` FROM sync_metadata WHERE `key` = ?',
+      [key]
+    ) as any[]
+
+    if (result.length === 0 || result[0].value === null || result[0].value === undefined || result[0].value === '') {
+      return null
+    }
+
+    return String(result[0].value)
+  }
+
+  private async setMetadataValues(entries: Array<[string, string | null]>) {
+    if (entries.length === 0) return
+
+    await this.ensureMetadataTable()
+    const placeholders = entries.map(() => '(?, ?)').join(', ')
+    const params = entries.flatMap(([key, value]) => [key, value])
+
+    await query(
+      `INSERT INTO sync_metadata (\`key\`, \`value\`) VALUES ${placeholders}
+       ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`,
+      params
+    )
+  }
+
+  private async hydrateSyncState() {
+    const [
+      lastCompletedSyncTime,
+      lastProcessedTime,
+      lastSyncDurationMs,
+      lastSyncItemCount,
+      lastSyncError,
+      currentSyncStartedAt,
+      currentSyncMode,
+      currentSyncPhase,
+    ] = await Promise.all([
+      this.getMetadataValue('last_completed_sync_time'),
+      this.getMetadataValue('last_processed_time'),
+      this.getMetadataValue('last_sync_duration_ms'),
+      this.getMetadataValue('last_sync_item_count'),
+      this.getMetadataValue('last_sync_error'),
+      this.getMetadataValue('current_sync_started_at'),
+      this.getMetadataValue('current_sync_mode'),
+      this.getMetadataValue('current_sync_phase'),
+    ])
+
+    this.lastSyncTime = this.parseDateValue(lastCompletedSyncTime)
+    this.lastProcessedTime = this.parseDateValue(lastProcessedTime)
+    this.lastSyncDurationMs = this.parseNumberValue(lastSyncDurationMs)
+    this.lastSyncItemCount = this.parseNumberValue(lastSyncItemCount)
+    this.lastSyncError = lastSyncError
+    this.currentSyncStartedAt = this.parseDateValue(currentSyncStartedAt)
+    this.currentSyncMode = this.normalizeSyncMode(currentSyncMode)
+    this.currentSyncPhase = this.normalizeSyncPhase(currentSyncPhase)
+    this.isSyncing = this.currentSyncPhase === 'fetching' || this.currentSyncPhase === 'processing'
+  }
+
+  private async markSyncStarted(mode: SyncMode) {
+    const startedAt = new Date()
+    const startedAtValue = dayjs(startedAt).format('YYYY-MM-DD HH:mm:ss')
+
+    this.isSyncing = true
+    this.currentSyncMode = mode
+    this.currentSyncPhase = 'fetching'
+    this.currentSyncStartedAt = startedAt
+    this.lastSyncError = null
+
+    await this.setMetadataValues([
+      ['current_sync_started_at', startedAtValue],
+      ['current_sync_mode', mode],
+      ['current_sync_phase', 'fetching'],
+      ['last_sync_error', null],
+    ])
+
+    return startedAt
+  }
+
+  private async markSyncPhase(phase: Extract<SyncPhase, 'fetching' | 'processing'>) {
+    this.currentSyncPhase = phase
+    await this.setMetadataValues([
+      ['current_sync_phase', phase],
+    ])
+  }
+
+  private async markSyncCompleted(completedAt: Date, durationMs: number, itemCount: number) {
+    const completedAtValue = dayjs(completedAt).format('YYYY-MM-DD HH:mm:ss')
+    const nextSyncValue = dayjs(completedAt).add(this.getSyncIntervalHours(), 'hour').format('YYYY-MM-DD HH:mm:ss')
+
+    this.isSyncing = false
+    this.lastSyncTime = completedAt
+    this.lastSyncDurationMs = durationMs
+    this.lastSyncItemCount = itemCount
+    this.lastSyncError = null
+    this.currentSyncPhase = 'completed'
+    this.currentSyncStartedAt = null
+
+    await this.setMetadataValues([
+      ['last_sync_time', completedAtValue],
+      ['last_completed_sync_time', completedAtValue],
+      ['next_sync_time', nextSyncValue],
+      ['sync_interval_hours', String(this.getSyncIntervalHours())],
+      ['last_sync_duration_ms', String(durationMs)],
+      ['last_sync_item_count', String(itemCount)],
+      ['last_sync_error', null],
+      ['current_sync_started_at', null],
+      ['current_sync_phase', 'completed'],
+      ['current_sync_mode', this.currentSyncMode],
+    ])
+  }
+
+  private async markSyncFailed(error: unknown) {
+    const message = error instanceof Error ? error.message : '未知错误'
+
+    this.isSyncing = false
+    this.lastSyncError = message
+    this.currentSyncPhase = 'failed'
+    this.currentSyncStartedAt = null
+
+    await this.setMetadataValues([
+      ['last_sync_error', message],
+      ['current_sync_started_at', null],
+      ['current_sync_phase', 'failed'],
+      ['current_sync_mode', this.currentSyncMode],
+    ])
+  }
+
   async initialize() {
     console.log('🔄 初始化数据同步器...')
 
@@ -45,6 +225,7 @@ class DataSync {
     try {
       await initDatabase()
       await this.ensureMetadataTable()
+      await this.hydrateSyncState()
     } catch (error) {
       console.error('❌ 数据库表初始化失败:', error)
       return false
@@ -58,12 +239,12 @@ class DataSync {
   async syncData(options?: SyncOptions) {
     if (this.isSyncing) {
       console.log('⚠️  同步已在运行中，跳过本次同步')
-      return
+      return this.getSyncStatus()
     }
 
-    this.isSyncing = true
-    const startTime = Date.now()
-    const completedAt = new Date()
+    const mode: SyncMode = options?.fullSync === true ? 'full' : 'incremental'
+    const startedAt = await this.markSyncStarted(mode)
+    let totalSynced = 0
 
     try {
       console.log('🔄 开始数据同步...')
@@ -74,7 +255,7 @@ class DataSync {
       const syncStart = (isInitialSync || fullSync)
         ? dayjs('2026-01-01 00:00:00')
         : dayjs().subtract(RECENT_SYNC_MINUTES, 'minute')
-      const syncEnd = dayjs(completedAt)
+      const syncEnd = dayjs()
       const startDate = syncStart.format('YYYY-MM-DD')
       const endDate = syncEnd.format('YYYY-MM-DD')
       const syncWindow: SyncWindow = {
@@ -86,7 +267,8 @@ class DataSync {
 
       let page = 1
       const pageSize = 100
-      let totalSynced = 0
+
+      await this.markSyncPhase('fetching')
 
       while (true) {
         console.log(`📄 获取第 ${page} 页数据...`)
@@ -101,8 +283,7 @@ class DataSync {
         })
 
         if (!response?.success) {
-          console.log('⚠️ API 响应失败或格式异常，停止同步')
-          break
+          throw new Error('API 响应失败或格式异常')
         }
 
         const logs = response.data.logs || []
@@ -135,21 +316,22 @@ class DataSync {
         await this.delay(1000)
       }
 
-      await this.updateSyncMetadata(syncEnd.toDate())
-
-      const duration = Date.now() - startTime
-      console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
+      await this.markSyncPhase('processing')
 
       if (totalSynced > 0) {
-        this.processSyncedRange(syncWindow).catch((error) => {
-          console.error('❌ 后台计算失败:', error)
-        })
+        await this.processSyncedRange(syncWindow)
       }
+
+      const completedAt = new Date()
+      const duration = completedAt.getTime() - startedAt.getTime()
+      await this.markSyncCompleted(completedAt, duration, totalSynced)
+      console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
+
+      return this.getSyncStatus()
     } catch (error) {
       console.error('❌ 数据同步失败:', error)
-    } finally {
-      this.isSyncing = false
-      this.lastSyncTime = completedAt
+      await this.markSyncFailed(error)
+      return this.getSyncStatus()
     }
   }
 
@@ -172,6 +354,7 @@ class DataSync {
     console.log(`🧮 开始后台处理: ${syncWindow.start} - ${syncWindow.end}`)
 
     await this.ensureMetadataTable()
+    await this.markSyncPhase('processing')
     await this.backfillCosts(syncWindow)
     await this.aggregateData(syncWindow)
     await this.updateProcessingTime(syncWindow.end)
@@ -332,60 +515,54 @@ class DataSync {
 
   private async getLastCompletedSyncTime(): Promise<Date | null> {
     try {
-      await this.ensureMetadataTable()
-      const result = await query(
-        "SELECT `value` FROM sync_metadata WHERE `key` = 'last_completed_sync_time'"
-      ) as any[]
-
-      if (result.length === 0 || !result[0].value) {
-        return null
-      }
-
-      const parsed = dayjs(result[0].value)
-      return parsed.isValid() ? parsed.toDate() : null
+      const value = await this.getMetadataValue('last_completed_sync_time')
+      return this.parseDateValue(value)
     } catch (error) {
       console.warn('获取最后完成同步时间失败:', error)
       return null
     }
   }
 
-  private async updateProcessingTime(time: string) {
-    await query(
-      "INSERT INTO sync_metadata (`key`, `value`) VALUES ('last_processed_time', ?) ON DUPLICATE KEY UPDATE `value` = ?",
-      [time, time]
-    )
-  }
-
-  private async updateSyncMetadata(completedAt: Date) {
-    const completedAtValue = dayjs(completedAt).format('YYYY-MM-DD HH:mm:ss')
-    const nextSyncValue = dayjs(completedAt).add(this.getSyncIntervalHours(), 'hour').format('YYYY-MM-DD HH:mm:ss')
-
+  private async getLastProcessedTime(): Promise<Date | null> {
     try {
-      await this.ensureMetadataTable()
-      await query(
-        `INSERT INTO sync_metadata (
-          \`key\`, \`value\`
-        ) VALUES
-          ('last_sync_time', ?),
-          ('last_completed_sync_time', ?),
-          ('next_sync_time', ?),
-          ('sync_interval_hours', ?)
-        ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`,
-        [completedAtValue, completedAtValue, nextSyncValue, String(this.getSyncIntervalHours())]
-      )
-      this.lastSyncTime = completedAt
+      const value = await this.getMetadataValue('last_processed_time')
+      return this.parseDateValue(value)
     } catch (error) {
-      console.error('更新同步时间失败:', error)
+      console.warn('获取最后处理时间失败:', error)
+      return null
     }
   }
 
-  async getSyncStatus() {
-    const lastCompletedSyncTime = await this.getLastCompletedSyncTime()
+  private async updateProcessingTime(time: string) {
+    this.lastProcessedTime = this.parseDateValue(time)
+    await this.setMetadataValues([
+      ['last_processed_time', time],
+    ])
+  }
+
+  private async updateSyncMetadata(completedAt: Date) {
+    await this.markSyncCompleted(completedAt, this.lastSyncDurationMs || 0, this.lastSyncItemCount || 0)
+  }
+
+  async getSyncStatus(): Promise<SyncRuntimeState> {
+    if (!this.lastSyncTime && !this.lastProcessedTime && this.lastSyncDurationMs === null && this.lastSyncItemCount === null && !this.lastSyncError && !this.currentSyncStartedAt) {
+      await this.hydrateSyncState()
+    }
+
+    const lastCompletedSyncTime = this.lastSyncTime || await this.getLastCompletedSyncTime()
+    const lastProcessedTime = this.lastProcessedTime || await this.getLastProcessedTime()
     const nextSyncTime = this.getNextSyncTime(lastCompletedSyncTime)
 
     return {
       isSyncing: this.isSyncing,
+      phase: this.currentSyncPhase,
+      mode: this.currentSyncMode,
+      currentSyncStartedAt: this.currentSyncStartedAt,
       lastCompletedSyncTime,
+      lastProcessedTime,
+      lastSyncDurationMs: this.lastSyncDurationMs,
+      lastSyncItemCount: this.lastSyncItemCount,
+      lastSyncError: this.lastSyncError,
       nextSyncTime,
       syncIntervalHours: this.getSyncIntervalHours(),
     }
@@ -462,12 +639,35 @@ class DataSync {
   }
 
   async rebuildDerivedData(startDate: string, endDate: string) {
+    if (this.isSyncing) {
+      console.log('⚠️  同步已在运行中，跳过本次重建')
+      return this.getSyncStatus()
+    }
+
+    const startedAt = await this.markSyncStarted('rebuild')
     const syncWindow: SyncWindow = {
       start: `${startDate} 00:00:00`,
       end: `${endDate} 23:59:59`,
     }
 
-    await this.processSyncedRange(syncWindow)
+    try {
+      await this.processSyncedRange(syncWindow)
+      const completedAt = new Date()
+      const duration = completedAt.getTime() - startedAt.getTime()
+      const rows = await query(
+        `SELECT COUNT(*) as count FROM api_logs
+         WHERE timestamp BETWEEN STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s') AND STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s')`,
+        [syncWindow.start, syncWindow.end]
+      ) as any[]
+      const itemCount = Number(rows[0]?.count) || 0
+
+      await this.markSyncCompleted(completedAt, duration, itemCount)
+      return this.getSyncStatus()
+    } catch (error) {
+      console.error('❌ 重建派生数据失败:', error)
+      await this.markSyncFailed(error)
+      return this.getSyncStatus()
+    }
   }
 
   // 启动定时同步

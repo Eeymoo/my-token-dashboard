@@ -52,6 +52,14 @@ temp/
 
 # Docker 相关
 docker-compose.override.yml
+docker-compose.release.yml
+
+# Claude 本地文件
+.context-todos.db
+.context-todos.db-journal
+.context-todos.db-shm
+.context-todos.db-wal
+.claude/scheduled_tasks.lock
 
 # 操作系统文件
 Thumbs.db

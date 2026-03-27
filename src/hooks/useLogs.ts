@@ -2,6 +2,22 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import type { LogQueryParams, LogQueryResponse, SummaryResponse } from '@/types/api'
 
+type SyncStatusResponse = {
+  success: boolean
+  message?: string
+  data: {
+    syncStatus: SummaryResponse['data']['syncStatus']
+  }
+  error?: string
+}
+
+type TriggerSyncParams = {
+  fullSync?: boolean
+  rebuild?: boolean
+  startDate?: string
+  endDate?: string
+}
+
 // 获取日志数据
 export function useLogs(params: LogQueryParams) {
   return useQuery({
@@ -18,13 +34,12 @@ export function useLogs(params: LogQueryParams) {
       })
       return response.data
     },
-    staleTime: 5 * 60 * 1000, // 5分钟
+    staleTime: 5 * 60 * 1000,
     enabled: !!params.startDate && !!params.endDate,
   })
 }
 
 // 获取汇总数据
-// TODO(feat): [CHECKLIST 16.1/16.3] 解析后端新增的 modelTimeSeries 字段并提供友好的前端消费接口。
 export function useSummary(startDate: string, endDate: string, models?: string[]) {
   return useQuery({
     queryKey: ['summary', startDate, endDate, models],
@@ -36,11 +51,47 @@ export function useSummary(startDate: string, endDate: string, models?: string[]
           models: models?.join(','),
         },
       })
-      // TODO(feat): [CHECKLIST 16.3] 在此处整理 modelTimeSeries、timeSeries 等字段，预计算分时/累计数据和默认排序。
       return response.data
     },
-    staleTime: 1 * 60 * 1000, // 1分钟
+    staleTime: 1 * 60 * 1000,
     enabled: !!startDate && !!endDate,
+  })
+}
+
+export function useSyncStatus(enabled = true) {
+  return useQuery({
+    queryKey: ['sync-status'],
+    queryFn: async () => {
+      const response = await axios.get<SyncStatusResponse>('/api/sync', {
+        headers: {
+          Authorization: `Bearer ${process.env.NEXT_PUBLIC_ADMIN_API_KEY || 'default-admin-key'}`,
+        },
+      })
+      return response.data
+    },
+    enabled,
+    staleTime: 0,
+    refetchInterval: (query) => query.state.data?.data.syncStatus.isSyncing ? 3000 : false,
+    refetchIntervalInBackground: true,
+  })
+}
+
+export function useTriggerSync() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (params: TriggerSyncParams) => {
+      const response = await axios.post<SyncStatusResponse>('/api/sync', params, {
+        headers: {
+          Authorization: `Bearer ${process.env.NEXT_PUBLIC_ADMIN_API_KEY || 'default-admin-key'}`,
+        },
+      })
+      return response.data
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['sync-status'] })
+      await queryClient.invalidateQueries({ queryKey: ['summary'] })
+    },
   })
 }
 
@@ -52,7 +103,7 @@ export function useModels() {
       const response = await axios.get('/api/models')
       return response.data
     },
-    staleTime: 10 * 60 * 1000, // 10分钟
+    staleTime: 10 * 60 * 1000,
   })
 }
 
@@ -77,7 +128,6 @@ export function useTimeGranularity(startDate: string, endDate: string) {
   return useQuery({
     queryKey: ['granularity', startDate, endDate],
     queryFn: async () => {
-      // 前端计算粒度，不需要 API 调用
       const start = new Date(startDate)
       const end = new Date(endDate)
       const diffDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))

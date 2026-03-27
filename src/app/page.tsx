@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
-import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Segmented, Switch, Spin, Alert, Empty, Checkbox } from 'antd'
+import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Segmented, Switch, Spin, Alert, Empty, Checkbox, Tag, message } from 'antd'
 import { ReloadOutlined, DollarOutlined, BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false })
-import { useSummary, useModels } from '@/hooks/useLogs'
+import { useSummary, useModels, useSyncStatus, useTriggerSync } from '@/hooks/useLogs'
 import './globals.css'
 
 const { RangePicker } = DatePicker
@@ -58,6 +58,13 @@ export default function Home() {
     isLoading: modelsLoading
   } = useModels()
 
+  const {
+    data: syncStatusData,
+    refetch: refetchSyncStatus,
+  } = useSyncStatus(true)
+
+  const triggerSync = useTriggerSync()
+
   const summary = summaryData?.data?.summary || {
     totalTokens: 0,
     totalCost: 0,
@@ -69,9 +76,10 @@ export default function Home() {
 
   const timeSeriesData = summaryData?.data?.timeSeries || []
   const modelTimeSeries = summaryData?.data?.modelTimeSeries || []
-  const syncStatus = summaryData?.data?.syncStatus
+  const syncStatus = syncStatusData?.data?.syncStatus || summaryData?.data?.syncStatus
   const lastUpdated = syncStatus?.lastCompletedSyncTime ? dayjs(syncStatus.lastCompletedSyncTime) : null
   const nextSyncTime = syncStatus?.nextSyncTime ? dayjs(syncStatus.nextSyncTime) : null
+  const currentSyncStartedAt = syncStatus?.currentSyncStartedAt ? dayjs(syncStatus.currentSyncStartedAt) : null
 
   const formatNumber = (num: number) => {
     if (num >= 1000000000) return `${(num / 1000000000).toFixed(1)}B`
@@ -89,6 +97,31 @@ export default function Home() {
   const timeTrendMetricLabel = timeTrendMetric === 'tokens' ? 'Token数' : timeTrendMetric === 'cost' ? `花费 (${currency})` : '请求数'
   const nextSyncLabel = nextSyncTime?.isValid() ? nextSyncTime.format('HH:mm') : '--:--'
   const lastUpdatedLabel = lastUpdated?.isValid() ? lastUpdated.format('YYYY-MM-DD HH:mm:ss') : '暂无同步记录'
+  const currentSyncStartedLabel = currentSyncStartedAt?.isValid() ? currentSyncStartedAt.format('YYYY-MM-DD HH:mm:ss') : '--'
+
+  const formatDuration = (durationMs?: number | null) => {
+    if (!durationMs || durationMs <= 0) return '--'
+    const totalSeconds = Math.floor(durationMs / 1000)
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
+
+    if (minutes <= 0) return `${seconds} 秒`
+    return `${minutes} 分 ${seconds} 秒`
+  }
+
+  const syncPhaseLabel = syncStatus?.phase === 'fetching'
+    ? (syncStatus.mode === 'full' ? '全量同步中' : '同步中')
+    : syncStatus?.phase === 'processing'
+      ? (syncStatus.mode === 'rebuild' ? '重建处理中' : '后台处理中')
+      : syncStatus?.phase === 'failed'
+        ? '同步失败'
+        : '空闲'
+
+  const syncTagColor = syncStatus?.phase === 'failed'
+    ? 'error'
+    : syncStatus?.isSyncing
+      ? 'processing'
+      : 'success'
 
   // TODO(feat): [CHECKLIST 16.3/16.4] 将 modelTimeSeries 转换成图表可用的分时/累计数据集。
   const modelChartData = useMemo(() => {
@@ -255,8 +288,26 @@ export default function Home() {
     }
   }, [currency, timeSeriesData, timeTrendMetric, timeTrendMetricLabel, timeTrendMode])
 
+  useEffect(() => {
+    if (syncStatus?.isSyncing) {
+      refetchSummary()
+    }
+  }, [refetchSummary, syncStatus?.isSyncing, syncStatus?.phase])
+
   const handleRefresh = () => {
     refetchSummary()
+    refetchSyncStatus()
+  }
+
+  const handleTriggerSync = async (fullSync = false) => {
+    try {
+      const response = await triggerSync.mutateAsync({ fullSync })
+      message.success(response.message || '同步已触发')
+      refetchSummary()
+      refetchSyncStatus()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '触发同步失败')
+    }
   }
 
   if (summaryError) {
@@ -308,8 +359,22 @@ export default function Home() {
             >
               刷新数据
             </Button>
+            <Button
+              type="primary"
+              onClick={() => handleTriggerSync(false)}
+              loading={triggerSync.isPending || Boolean(syncStatus?.isSyncing)}
+            >
+              {syncStatus?.isSyncing ? '同步进行中' : '立即同步'}
+            </Button>
+            <Button
+              onClick={() => handleTriggerSync(true)}
+              loading={triggerSync.isPending && syncStatus?.mode === 'full'}
+              disabled={Boolean(syncStatus?.isSyncing)}
+            >
+              全量同步
+            </Button>
             <Button icon={<ClockCircleOutlined />} disabled>
-              等待下次同步（{nextSyncLabel}）
+              {syncStatus?.isSyncing ? syncPhaseLabel : `等待下次同步（${nextSyncLabel}）`}
             </Button>
             <Switch
               checkedChildren="暗色"
@@ -319,6 +384,27 @@ export default function Home() {
             />
           </Space>
         </div>
+
+        <Card className="mb-6" title="同步状态">
+          <Space direction="vertical" size="small">
+            <Space>
+              <Tag color={syncTagColor}>{syncPhaseLabel}</Tag>
+              <span className="text-sm text-gray-500">模式：{syncStatus?.mode || 'incremental'}</span>
+            </Space>
+            <div className="text-sm text-gray-600 dark:text-gray-300">开始时间：{currentSyncStartedLabel}</div>
+            <div className="text-sm text-gray-600 dark:text-gray-300">最后完成：{lastUpdatedLabel}</div>
+            <div className="text-sm text-gray-600 dark:text-gray-300">整体用时：{formatDuration(syncStatus?.lastSyncDurationMs)}</div>
+            <div className="text-sm text-gray-600 dark:text-gray-300">处理条数：{syncStatus?.lastSyncItemCount ?? '--'}</div>
+            {syncStatus?.lastSyncError ? (
+              <Alert
+                type="error"
+                showIcon
+                message="最近一次同步失败"
+                description={syncStatus.lastSyncError}
+              />
+            ) : null}
+          </Space>
+        </Card>
 
         <Card className="mb-6" title="筛选器">
           <Row gutter={[16, 16]}>
@@ -506,6 +592,7 @@ export default function Home() {
 
         <div className="mt-6 text-center text-gray-500 text-sm dark:text-gray-400">
           <p>最后更新时间: {lastUpdatedLabel}</p>
+          <p>上次同步整体用时: {formatDuration(syncStatus?.lastSyncDurationMs)}</p>
         </div>
       </div>
     </div>

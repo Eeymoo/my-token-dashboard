@@ -209,7 +209,7 @@ export async function upsertAggregatedRange(
 
   const format = periodType === 'hour' ? '%Y-%m-%d %H:00:00' :
                 periodType === 'day' ? '%Y-%m-%d 00:00:00' :
-                periodType === 'week' ? '%Y-%u 00:00:00' :
+                periodType === 'week' ? '%x-%v-1 00:00:00' :
                 '%Y-%m-01 00:00:00'
 
   await query(

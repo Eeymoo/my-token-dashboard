@@ -166,7 +166,14 @@ export interface SummaryResponse {
     modelTimeSeries: ModelTimeSeriesPoint[]
     syncStatus: {
       isSyncing: boolean
+      phase: 'idle' | 'fetching' | 'processing' | 'completed' | 'failed'
+      mode: 'incremental' | 'full' | 'rebuild'
+      currentSyncStartedAt: string | null
       lastCompletedSyncTime: string | null
+      lastProcessedTime: string | null
+      lastSyncDurationMs: number | null
+      lastSyncItemCount: number | null
+      lastSyncError: string | null
       nextSyncTime: string | null
       syncIntervalHours: number
     }
