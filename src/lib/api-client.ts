@@ -82,8 +82,19 @@ apiClient.interceptors.response.use(
 function normalizeLogResponse(raw: any, params: LogQueryParams): LogQueryResponse {
   const payload = raw || {}
   const data = payload.data || {}
-  const paginationSource = data.pagination || {}
-  const items = Array.isArray(data.items) ? data.items : Array.isArray(data.logs) ? data.logs : []
+  const listSource = Array.isArray(data.items)
+    ? data.items
+    : Array.isArray(data.logs)
+      ? data.logs
+      : Array.isArray(payload.items)
+        ? payload.items
+        : Array.isArray(payload.logs)
+          ? payload.logs
+          : Array.isArray(payload.data)
+            ? payload.data
+            : []
+  const paginationSource = data.pagination || payload.pagination || {}
+  const items = Array.isArray(listSource) ? listSource : []
 
   const page = Number(
     paginationSource.page ??
@@ -106,8 +117,10 @@ function normalizeLogResponse(raw: any, params: LogQueryParams): LogQueryRespons
   const total = Number(
     paginationSource.total ??
     data.total ??
+    payload.total ??
     paginationSource.count ??
     data.count ??
+    payload.count ??
     items.length
   ) || 0
 
@@ -116,12 +129,14 @@ function normalizeLogResponse(raw: any, params: LogQueryParams): LogQueryRespons
     paginationSource.total_pages ??
     paginationSource.pages ??
     data.total_pages ??
+    payload.total_pages ??
+    payload.pages ??
     Math.ceil(total / (pageSize || 1))
   ) || Math.max(1, Math.ceil(total / (pageSize || 1)))
 
   const success = typeof payload.success === 'boolean'
     ? payload.success
-    : payload.code === 0 || payload.code === undefined
+    : items.length > 0 || payload.code === 0 || payload.code === undefined
 
   return {
     success,
