@@ -1,6 +1,35 @@
 import axios from 'axios'
 import type { LogQueryParams, LogQueryResponse } from '@/types/api'
 
+export type MetadataProvider = {
+  id: string
+  name: string
+  api?: string
+  doc?: string
+  iconURL?: string
+}
+
+export type MetadataModel = {
+  id: string
+  name: string
+  providerId: string
+  api?: string
+  doc?: string
+  family?: string
+  description?: string
+  cost?: {
+    input?: number
+    output?: number
+    cache_read?: number
+  }
+  limit?: {
+    context?: number
+  }
+  modalities?: {
+    input?: string[]
+  }
+}
+
 // 创建 axios 实例
 const apiClient = axios.create({
   baseURL: process.env.NEW_API_BASE_URL || 'https://new-api.onemue.cn/',
@@ -10,6 +39,11 @@ const apiClient = axios.create({
     'Authorization': `Bearer ${process.env.NEW_API_KEY || 'xmCgDsePJkpnrhsFmbp2SnqhiS8i'}`,
     'New-Api-User': process.env.NEW_API_USER || '',
   },
+})
+
+const metadataClient = axios.create({
+  baseURL: 'https://basellm.github.io/llm-metadata',
+  timeout: 30000,
 })
 
 // 请求拦截器
@@ -126,6 +160,16 @@ export async function fetchLogs(params: LogQueryParams): Promise<LogQueryRespons
     console.error('获取日志数据失败:', error)
     throw error
   }
+}
+
+export async function fetchMetadataProviders() {
+  const response = await metadataClient.get<{ providers: MetadataProvider[] }>('/api/providers.json')
+  return response.data.providers || []
+}
+
+export async function fetchMetadataModels() {
+  const response = await metadataClient.get<{ models: MetadataModel[] }>('/api/index.json')
+  return response.data.models || []
 }
 
 // 获取模型列表

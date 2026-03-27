@@ -1,31 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { query } from '@/lib/db'
+import { query, upsertAllModelMetadata } from '@/lib/db'
 
 export async function GET(_request: NextRequest) {
   try {
-    // 首先尝试从 models 表获取
     let modelsResult
 
     try {
       modelsResult = await query(`
-        SELECT model_id, model_name, provider, category, description, is_active
-        FROM models
-        WHERE is_active = true
-        ORDER BY model_name
+        SELECT
+          mc.model_id,
+          mc.model_name,
+          v.vendor_name AS provider,
+          mc.category,
+          mc.description,
+          mc.is_active
+        FROM model_catalog mc
+        JOIN vendors v ON v.vendor_id = mc.vendor_id
+        WHERE mc.is_active = true
+        ORDER BY mc.model_name
       `) as any[]
     } catch (error) {
-      // 如果 models 表不存在或查询失败，从日志中提取
-      console.log('models 表查询失败，从日志中提取模型列表:', error)
-      modelsResult = await query(`
-        SELECT
-          DISTINCT model_id,
-          model_name,
-          provider,
-          category
-        FROM api_logs
-        WHERE model_id IS NOT NULL AND model_id != 'unknown'
-        ORDER BY model_name
-      `) as any[]
+      console.log('model_catalog 表查询失败，回退到 models 表:', error)
+
+      try {
+        modelsResult = await query(`
+          SELECT model_id, model_name, provider, category, description, is_active
+          FROM models
+          WHERE is_active = true
+          ORDER BY model_name
+        `) as any[]
+      } catch (legacyError) {
+        console.log('models 表查询失败，从日志中提取模型列表:', legacyError)
+        modelsResult = await query(`
+          SELECT
+            DISTINCT model_id,
+            model_name,
+            provider,
+            category
+          FROM api_logs
+          WHERE model_id IS NOT NULL AND model_id != 'unknown'
+          ORDER BY model_name
+        `) as any[]
+      }
     }
 
     const models = modelsResult.map((row: any) => ({
@@ -79,28 +95,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const sql = `
-      INSERT INTO models (model_id, model_name, provider, category, description, is_active)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        model_name = VALUES(model_name),
-        provider = VALUES(provider),
-        category = VALUES(category),
-        description = VALUES(description),
-        is_active = VALUES(is_active),
-        updated_at = CURRENT_TIMESTAMP
-    `
-
-    const params = [
-      body.modelId,
-      body.modelName,
-      body.provider || 'unknown',
-      body.category || 'text',
-      body.description || null,
-      body.isActive !== undefined ? body.isActive : true,
-    ]
-
-    await query(sql, params)
+    await upsertAllModelMetadata({
+      modelId: body.modelId,
+      modelName: body.modelName,
+      provider: body.provider || 'unknown',
+      category: body.category || 'text',
+      description: body.description || null,
+      isActive: body.isActive !== undefined ? body.isActive : true,
+    })
 
     return NextResponse.json({
       success: true,

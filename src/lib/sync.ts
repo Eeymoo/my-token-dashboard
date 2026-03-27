@@ -1,6 +1,14 @@
 import cron from 'node-cron'
-import { fetchLogs } from './api-client'
-import { insertLog, query, initDatabase, testConnection, upsertAggregatedRange } from './db'
+import { fetchLogs, fetchMetadataModels, fetchMetadataProviders } from './api-client'
+import {
+  insertLog,
+  query,
+  initDatabase,
+  testConnection,
+  upsertAggregatedRange,
+  upsertAllModelMetadata,
+  upsertVendor,
+} from './db'
 import dayjs from 'dayjs'
 
 const AGGREGATION_PERIODS = ['hour', 'day', 'week', 'month'] as const
@@ -255,6 +263,46 @@ class DataSync {
     return true
   }
 
+  private async syncRemoteMetadata() {
+    const [providers, models] = await Promise.all([
+      fetchMetadataProviders(),
+      fetchMetadataModels(),
+    ])
+
+    const providerMap = new Map(providers.map((provider) => [provider.id, provider]))
+
+    for (const provider of providers) {
+      await upsertVendor({
+        vendorId: provider.id,
+        vendorName: provider.name,
+        apiBase: provider.api || null,
+        docUrl: provider.doc || null,
+        iconUrl: provider.iconURL || null,
+      })
+    }
+
+    for (const model of models) {
+      const provider = providerMap.get(model.providerId)
+      const category = model.modalities?.input?.includes('image') ? 'image' : 'text'
+
+      await upsertAllModelMetadata({
+        modelId: model.id,
+        modelName: model.name,
+        provider: provider?.name || model.providerId,
+        category,
+        description: model.description || model.family || null,
+        apiBase: provider?.api || model.api || null,
+        docUrl: provider?.doc || model.doc || null,
+        iconUrl: provider?.iconURL || null,
+        maxContext: model.limit?.context ?? null,
+        inputPrice: model.cost?.input ?? null,
+        outputPrice: model.cost?.output ?? null,
+        cachedPrice: model.cost?.cache_read ?? null,
+        isActive: true,
+      })
+    }
+  }
+
   // 执行一次数据同步
   async syncData(options?: SyncOptions) {
     if (this.isBuildPhase()) {
@@ -272,6 +320,7 @@ class DataSync {
 
     try {
       console.log('🔄 开始数据同步...')
+      await this.syncRemoteMetadata()
 
       const lastSync = await this.getLastSyncTime()
       const fullSync = options?.fullSync === true
@@ -323,6 +372,13 @@ class DataSync {
           try {
             const dbLog = this.transformLogToDbFormat(log)
             await insertLog(dbLog)
+            await upsertAllModelMetadata({
+              modelId: dbLog.modelId,
+              modelName: dbLog.modelName,
+              provider: dbLog.provider,
+              category: dbLog.category,
+              isActive: true,
+            })
             totalSynced++
           } catch (error) {
             console.error('❌ 插入日志失败:', error)
@@ -415,8 +471,8 @@ class DataSync {
     const modelName = toNullableString(log.model?.modelName || log.model_name || log.modelName || modelId, '未知模型')!
     const provider = toNullableString(log.model?.provider || log.provider, 'unknown')!
     const category = toNullableString(log.model?.category || log.category, 'text')!
-    const userId = toNullableString(log.user?.userId || log.user_id || log.userId)
-    const userName = toNullableString(log.user?.userName || log.username || log.user_name || log.userName)
+    const userId = toNullableString(log.user?.userId || log.user_id || log.userId, '1')!
+    const userName = toNullableString(log.user?.userName || log.username || log.user_name || log.userName, 'default')!
     const teamId = toNullableString(log.user?.teamId || log.team_id || log.teamId)
 
     const fallbackTotalTokens =
@@ -707,13 +763,24 @@ class DataSync {
       return
     }
 
-    const cronExpression = `0 */${intervalHours} * * *`
+    const logSyncCronExpression = `0 */${intervalHours} * * *`
+    const metadataSyncCronExpression = '0 3 * * *'
 
-    console.log(`⏰ 设置定时同步: ${cronExpression} (每 ${intervalHours} 小时)`)
+    console.log(`⏰ 设置定时日志同步: ${logSyncCronExpression} (每 ${intervalHours} 小时)`)
+    console.log(`⏰ 设置定时元数据同步: ${metadataSyncCronExpression} (每天一次)`)
 
-    cron.schedule(cronExpression, () => {
+    cron.schedule(logSyncCronExpression, () => {
       console.log('⏰ 定时同步任务触发')
       this.syncData()
+    })
+
+    cron.schedule(metadataSyncCronExpression, async () => {
+      console.log('⏰ 定时元数据同步任务触发')
+      try {
+        await this.syncRemoteMetadata()
+      } catch (error) {
+        console.error('❌ 定时元数据同步失败:', error)
+      }
     })
 
     console.log('🚀 立即执行首次同步...')

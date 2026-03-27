@@ -28,7 +28,14 @@
 
 ## 🏗️ 技术架构
 
-### 前端
+### 构建阶段与数据库访问
+
+为了避免 Next.js 在 `npm run build` 时尝试访问本地数据库导致失败，项目采用以下策略：
+
+1. 首页 `src/app/page.tsx` 保持 `use client` 并依赖客户端数据拉取，构建阶段不会预渲染数据。
+2. `src/lib/sync.ts` 在检测到 `NEXT_PHASE === 'phase-production-build'` 或设置 `SKIP_SYNC_DB=1` 时，`initialize`、`syncData`、`getSyncStatus` 会返回安全的空状态，不连接数据库。
+
+因此在本地或 CI 构建时，即使 MySQL 未启动，构建流程也可顺利完成。运行时请确保数据库服务可用，必要时取消 `SKIP_SYNC_DB` 并提供可达的 `DATABASE_HOST`。
 
 ## ✅ 需求确认（分模型时序图增强）
 
@@ -209,9 +216,11 @@ src/
 
 ### 主要表结构
 1. **api_logs**: 原始 API 日志记录
-2. **models**: 模型信息表
-3. **aggregated_data**: 聚合数据表（按时间粒度）
-4. **sync_metadata**: 同步元数据表
+2. **vendors**: 厂商维度表（每天从 llm-metadata 全量同步一次）
+3. **model_catalog**: 模型维度表（每天从 llm-metadata 全量同步一次）
+4. **models**: 兼容保留的模型信息表
+5. **aggregated_data**: 聚合数据表（按时间粒度）
+6. **sync_metadata**: 同步元数据表
 
 ### 索引优化
 - 时间戳索引: 加速时间范围查询

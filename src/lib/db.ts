@@ -2,6 +2,34 @@ import mysql from 'mysql2/promise'
 
 export type AggregationPeriod = 'hour' | 'day' | 'week' | 'month'
 
+export interface VendorRecord {
+  vendorId: string
+  vendorName: string
+  region?: string | null
+  currency?: string | null
+  apiBase?: string | null
+  docUrl?: string | null
+  iconUrl?: string | null
+}
+
+export interface ModelCatalogRecord {
+  modelId: string
+  modelName: string
+  vendorId: string
+  category: string
+  description?: string | null
+  isActive?: boolean
+  maxContext?: number | null
+  inputPrice?: number | null
+  outputPrice?: number | null
+  cachedPrice?: number | null
+}
+
+function normalizeVendorId(provider: string | null | undefined) {
+  const normalized = (provider || 'unknown').trim().toLowerCase()
+  return normalized.length > 0 ? normalized.replace(/\s+/g, '-') : 'unknown'
+}
+
 // 数据库连接配置
 const dbConfig = {
   host: process.env.DATABASE_HOST || 'localhost',
@@ -43,8 +71,8 @@ export async function initDatabase() {
         model_name VARCHAR(200) NOT NULL,
         provider VARCHAR(100),
         category VARCHAR(50),
-        user_id VARCHAR(100),
-        user_name VARCHAR(200),
+        user_id VARCHAR(100) NOT NULL DEFAULT '1',
+        user_name VARCHAR(200) NOT NULL DEFAULT 'default',
         team_id VARCHAR(100),
         total_tokens INT NOT NULL DEFAULT 0,
         prompt_tokens INT NOT NULL DEFAULT 0,
@@ -64,6 +92,42 @@ export async function initDatabase() {
         INDEX idx_model (model_id),
         INDEX idx_user (user_id),
         INDEX idx_team (team_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `)
+
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS vendors (
+        vendor_id VARCHAR(100) PRIMARY KEY,
+        vendor_name VARCHAR(200) NOT NULL,
+        region VARCHAR(16),
+        currency VARCHAR(8),
+        api_base VARCHAR(255),
+        doc_url VARCHAR(255),
+        icon_url VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `)
+
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS model_catalog (
+        model_id VARCHAR(100) PRIMARY KEY,
+        model_name VARCHAR(200) NOT NULL,
+        vendor_id VARCHAR(100) NOT NULL,
+        category VARCHAR(50) NOT NULL,
+        description TEXT,
+        max_context INT,
+        input_price DECIMAL(18, 8),
+        output_price DECIMAL(18, 8),
+        cached_price DECIMAL(18, 8),
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_model_catalog_vendor (vendor_id),
+        INDEX idx_model_catalog_category (category),
+        CONSTRAINT fk_model_catalog_vendor
+          FOREIGN KEY (vendor_id) REFERENCES vendors(vendor_id)
+          ON UPDATE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `)
 
@@ -193,6 +257,159 @@ export async function insertLog(log: any) {
   ]
 
   return query(sql, params)
+}
+
+export async function upsertVendor(vendor: VendorRecord) {
+  const sql = `
+    INSERT INTO vendors (vendor_id, vendor_name, region, currency, api_base, doc_url, icon_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      vendor_name = VALUES(vendor_name),
+      region = VALUES(region),
+      currency = VALUES(currency),
+      api_base = VALUES(api_base),
+      doc_url = VALUES(doc_url),
+      icon_url = VALUES(icon_url),
+      updated_at = CURRENT_TIMESTAMP
+  `
+
+  return query(sql, [
+    vendor.vendorId,
+    vendor.vendorName,
+    vendor.region || null,
+    vendor.currency || null,
+    vendor.apiBase || null,
+    vendor.docUrl || null,
+    vendor.iconUrl || null,
+  ])
+}
+
+export async function upsertModelCatalog(model: ModelCatalogRecord) {
+  const sql = `
+    INSERT INTO model_catalog (model_id, model_name, vendor_id, category, description, max_context, input_price, output_price, cached_price, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      model_name = VALUES(model_name),
+      vendor_id = VALUES(vendor_id),
+      category = VALUES(category),
+      description = VALUES(description),
+      max_context = VALUES(max_context),
+      input_price = VALUES(input_price),
+      output_price = VALUES(output_price),
+      cached_price = VALUES(cached_price),
+      is_active = VALUES(is_active),
+      updated_at = CURRENT_TIMESTAMP
+  `
+
+  return query(sql, [
+    model.modelId,
+    model.modelName,
+    model.vendorId,
+    model.category,
+    model.description || null,
+    model.maxContext ?? null,
+    model.inputPrice ?? null,
+    model.outputPrice ?? null,
+    model.cachedPrice ?? null,
+    model.isActive ?? true,
+  ])
+}
+
+export async function syncModelDimensions(input: {
+  provider?: string | null
+  modelId: string
+  modelName: string
+  category?: string | null
+  description?: string | null
+  isActive?: boolean
+  maxContext?: number | null
+  inputPrice?: number | null
+  outputPrice?: number | null
+  cachedPrice?: number | null
+  region?: string | null
+  currency?: string | null
+  apiBase?: string | null
+  docUrl?: string | null
+  iconUrl?: string | null
+}) {
+  const providerName = (input.provider || 'unknown').trim() || 'unknown'
+  const vendorId = normalizeVendorId(providerName)
+
+  await upsertVendor({
+    vendorId,
+    vendorName: providerName,
+    region: input.region || null,
+    currency: input.currency || null,
+    apiBase: input.apiBase || null,
+    docUrl: input.docUrl || null,
+    iconUrl: input.iconUrl || null,
+  })
+
+  await upsertModelCatalog({
+    modelId: input.modelId,
+    modelName: input.modelName,
+    vendorId,
+    category: (input.category || 'text').trim() || 'text',
+    description: input.description || null,
+    maxContext: input.maxContext ?? null,
+    inputPrice: input.inputPrice ?? null,
+    outputPrice: input.outputPrice ?? null,
+    cachedPrice: input.cachedPrice ?? null,
+    isActive: input.isActive ?? true,
+  })
+
+  return vendorId
+}
+
+export async function upsertLegacyModel(model: {
+  modelId: string
+  modelName: string
+  provider?: string | null
+  category?: string | null
+  description?: string | null
+  isActive?: boolean
+}) {
+  const sql = `
+    INSERT INTO models (model_id, model_name, provider, category, description, is_active)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      model_name = VALUES(model_name),
+      provider = VALUES(provider),
+      category = VALUES(category),
+      description = VALUES(description),
+      is_active = VALUES(is_active),
+      updated_at = CURRENT_TIMESTAMP
+  `
+
+  return query(sql, [
+    model.modelId,
+    model.modelName,
+    (model.provider || 'unknown').trim() || 'unknown',
+    (model.category || 'text').trim() || 'text',
+    model.description || null,
+    model.isActive ?? true,
+  ])
+}
+
+export async function upsertAllModelMetadata(input: {
+  provider?: string | null
+  modelId: string
+  modelName: string
+  category?: string | null
+  description?: string | null
+  isActive?: boolean
+  maxContext?: number | null
+  inputPrice?: number | null
+  outputPrice?: number | null
+  cachedPrice?: number | null
+  region?: string | null
+  currency?: string | null
+  apiBase?: string | null
+  docUrl?: string | null
+  iconUrl?: string | null
+}) {
+  await syncModelDimensions(input)
+  await upsertLegacyModel(input)
 }
 
 export async function upsertAggregatedRange(
