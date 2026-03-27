@@ -937,27 +937,6 @@ class DataSync {
     }
   }
 
-  // 获取上次同步时间
-  private async getLastSyncTime(): Promise<string | null> {
-    try {
-      await this.ensureMetadataTable()
-      const result = await query(
-        "SELECT `value` FROM sync_metadata WHERE `key` = 'last_sync_time'"
-      ) as any[]
-
-      if (result.length > 0) {
-        return result[0].value
-      }
-
-      return null
-    } catch (error) {
-      console.warn('获取上次同步时间失败，使用默认时间:', error)
-      return null
-    }
-  }
-
-
-
   private async getLastCompletedSyncTime(): Promise<Date | null> {
     try {
       const value = await this.getMetadataValue('last_completed_sync_time')
