@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 
 const AGGREGATION_PERIODS = ['hour', 'day', 'week', 'month'] as const
 const RECENT_SYNC_MINUTES = 30
+const SKIP_SYNC_DB = process.env.SKIP_SYNC_DB === '1' || process.env.NEXT_PHASE === 'phase-production-build'
 
 type AggregationPeriod = typeof AGGREGATION_PERIODS[number]
 
@@ -20,7 +21,7 @@ type SyncOptions = {
 type SyncMode = 'incremental' | 'full' | 'rebuild'
 type SyncPhase = 'idle' | 'fetching' | 'processing' | 'completed' | 'failed'
 
-type SyncRuntimeState = {
+export type SyncRuntimeState = {
   isSyncing: boolean
   phase: SyncPhase
   mode: SyncMode
@@ -32,17 +33,6 @@ type SyncRuntimeState = {
   lastSyncError: string | null
   nextSyncTime: Date | null
   syncIntervalHours: number
-}
-
-type PersistedSyncState = {
-  lastCompletedSyncTime: Date | null
-  lastProcessedTime: Date | null
-  lastSyncDurationMs: number | null
-  lastSyncItemCount: number | null
-  lastSyncError: string | null
-  currentSyncStartedAt: Date | null
-  currentSyncMode: SyncMode
-  currentSyncPhase: SyncPhase
 }
 
 // 数据同步器类
@@ -60,6 +50,31 @@ class DataSync {
 
   private getSyncIntervalHours() {
     return Math.max(1, parseInt(process.env.SYNC_INTERVAL_HOURS || '1'))
+  }
+
+  private isBuildPhase() {
+    return SKIP_SYNC_DB
+  }
+
+  private getEmptySyncStatus(): SyncRuntimeState {
+    return {
+      isSyncing: false,
+      phase: 'idle',
+      mode: 'incremental',
+      currentSyncStartedAt: null,
+      lastCompletedSyncTime: null,
+      lastProcessedTime: null,
+      lastSyncDurationMs: null,
+      lastSyncItemCount: null,
+      lastSyncError: null,
+      nextSyncTime: null,
+      syncIntervalHours: this.getSyncIntervalHours(),
+    }
+  }
+
+  private getNextSyncTime(baseTime: Date | null = this.lastSyncTime) {
+    if (!baseTime) return null
+    return dayjs(baseTime).add(this.getSyncIntervalHours(), 'hour').toDate()
   }
 
   private parseDateValue(value: any): Date | null {
@@ -216,6 +231,11 @@ class DataSync {
   async initialize() {
     console.log('🔄 初始化数据同步器...')
 
+    if (this.isBuildPhase()) {
+      console.log('⚠️  检测到构建阶段，跳过数据库连接')
+      return true
+    }
+
     const dbConnected = await testConnection()
     if (!dbConnected) {
       console.error('❌ 数据库连接失败，无法初始化同步器')
@@ -237,6 +257,10 @@ class DataSync {
 
   // 执行一次数据同步
   async syncData(options?: SyncOptions) {
+    if (this.isBuildPhase()) {
+      return this.getEmptySyncStatus()
+    }
+
     if (this.isSyncing) {
       console.log('⚠️  同步已在运行中，跳过本次同步')
       return this.getSyncStatus()
@@ -540,11 +564,11 @@ class DataSync {
     ])
   }
 
-  private async updateSyncMetadata(completedAt: Date) {
-    await this.markSyncCompleted(completedAt, this.lastSyncDurationMs || 0, this.lastSyncItemCount || 0)
-  }
-
   async getSyncStatus(): Promise<SyncRuntimeState> {
+    if (this.isBuildPhase()) {
+      return this.getEmptySyncStatus()
+    }
+
     if (!this.lastSyncTime && !this.lastProcessedTime && this.lastSyncDurationMs === null && this.lastSyncItemCount === null && !this.lastSyncError && !this.currentSyncStartedAt) {
       await this.hydrateSyncState()
     }
@@ -672,6 +696,10 @@ class DataSync {
 
   // 启动定时同步
   startScheduledSync() {
+    if (this.isBuildPhase()) {
+      return
+    }
+
     const intervalHours = this.getSyncIntervalHours()
 
     if (intervalHours <= 0) {

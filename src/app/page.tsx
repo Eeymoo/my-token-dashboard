@@ -1,11 +1,13 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useState, useEffect, useMemo } from 'react'
-import dynamic from 'next/dynamic'
+import nextDynamic from 'next/dynamic'
 import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Segmented, Switch, Spin, Alert, Empty, Checkbox, Tag, message } from 'antd'
 import { ReloadOutlined, DollarOutlined, BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false })
+const ReactECharts = nextDynamic(() => import('echarts-for-react'), { ssr: false })
 import { useSummary, useModels, useSyncStatus, useTriggerSync } from '@/hooks/useLogs'
 import './globals.css'
 
