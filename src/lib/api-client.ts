@@ -1,4 +1,5 @@
 import axios from 'axios'
+import dayjs from 'dayjs'
 import type { LogQueryParams, LogQueryResponse } from '@/types/api'
 
 export type MetadataProvider = {
@@ -150,10 +151,15 @@ export async function fetchLogs(params: LogQueryParams): Promise<LogQueryRespons
   try {
     const response = await apiClient.get('/api/log/', {
       params: {
-        page: params.page || 1,
+        p: params.page || 1,
         page_size: params.pageSize || 100,
-        start_timestamp: (params as any).startTimestamp || (params.startDate ? `${params.startDate} 00:00:00` : undefined),
-        end_timestamp: (params as any).endTimestamp || (params.endDate ? `${params.endDate} 23:59:59` : undefined),
+        type: 2,
+        start_timestamp: (params as any).startTimestamp
+          ? dayjs((params as any).startTimestamp).unix()
+          : (params.startDate ? dayjs(`${params.startDate} 00:00:00`).unix() : undefined),
+        end_timestamp: (params as any).endTimestamp
+          ? dayjs((params as any).endTimestamp).unix()
+          : (params.endDate ? dayjs(`${params.endDate} 23:59:59`).unix() : undefined),
         model_name: params.models?.length ? params.models.join(',') : undefined,
       },
     })

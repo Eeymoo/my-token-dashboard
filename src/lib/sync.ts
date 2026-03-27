@@ -13,6 +13,12 @@ import dayjs from 'dayjs'
 
 const AGGREGATION_PERIODS = ['hour', 'day', 'week', 'month'] as const
 const RECENT_SYNC_MINUTES = 30
+const SYNC_MAX_INCREMENTAL_HOURS = 24
+const SYNC_LOG_TAG = '[sync]'
+const SYNC_FETCH_RETRY_LIMIT = 3
+const SYNC_FETCH_RETRY_DELAY_MS = 1500
+const SYNC_PROBE_EMPTY_PAGE_LIMIT = 2
+const SYNC_PROBE_MAX_PAGES = 20
 const SKIP_SYNC_DB = process.env.SKIP_SYNC_DB === '1' || process.env.NEXT_PHASE === 'phase-production-build'
 
 type AggregationPeriod = typeof AGGREGATION_PERIODS[number]
@@ -24,10 +30,27 @@ type SyncWindow = {
 
 type SyncOptions = {
   fullSync?: boolean
+  manual?: boolean
 }
 
 type SyncMode = 'incremental' | 'full' | 'rebuild'
-type SyncPhase = 'idle' | 'fetching' | 'processing' | 'completed' | 'failed'
+type SyncPhase = 'idle' | 'fetching' | 'processing' | 'completed' | 'partial' | 'failed'
+
+type SyncFailedPage = {
+  page: number
+  attempts: number
+  error: string
+}
+
+type SyncProgress = {
+  currentPage: number | null
+  totalPages: number | null
+  syncedPages: number
+  syncedItems: number
+  currentPageSize: number | null
+  lastPageError: string | null
+  lastUpdatedAt: Date | null
+}
 
 export type SyncRuntimeState = {
   isSyncing: boolean
@@ -39,6 +62,9 @@ export type SyncRuntimeState = {
   lastSyncDurationMs: number | null
   lastSyncItemCount: number | null
   lastSyncError: string | null
+  lastSyncWarning: string | null
+  failedPages: SyncFailedPage[]
+  progress: SyncProgress
   nextSyncTime: Date | null
   syncIntervalHours: number
 }
@@ -53,6 +79,17 @@ class DataSync {
   private lastSyncDurationMs: number | null = null
   private lastSyncItemCount: number | null = null
   private lastSyncError: string | null = null
+  private lastSyncWarning: string | null = null
+  private failedPages: SyncFailedPage[] = []
+  private progress: SyncProgress = {
+    currentPage: null,
+    totalPages: null,
+    syncedPages: 0,
+    syncedItems: 0,
+    currentPageSize: null,
+    lastPageError: null,
+    lastUpdatedAt: null,
+  }
   private lastProcessedTime: Date | null = null
   private metadataTableReady = false
 
@@ -75,6 +112,17 @@ class DataSync {
       lastSyncDurationMs: null,
       lastSyncItemCount: null,
       lastSyncError: null,
+      lastSyncWarning: null,
+      failedPages: [],
+      progress: {
+        currentPage: null,
+        totalPages: null,
+        syncedPages: 0,
+        syncedItems: 0,
+        currentPageSize: null,
+        lastPageError: null,
+        lastUpdatedAt: null,
+      },
       nextSyncTime: null,
       syncIntervalHours: this.getSyncIntervalHours(),
     }
@@ -102,9 +150,65 @@ class DataSync {
   }
 
   private normalizeSyncPhase(value: any): SyncPhase {
-    return value === 'fetching' || value === 'processing' || value === 'completed' || value === 'failed'
+    return value === 'fetching' || value === 'processing' || value === 'completed' || value === 'partial' || value === 'failed'
       ? value
       : 'idle'
+  }
+
+  private parseFailedPages(value: string | null): SyncFailedPage[] {
+    if (!value) return []
+
+    try {
+      const parsed = JSON.parse(value)
+      if (!Array.isArray(parsed)) return []
+
+      return parsed
+        .map((item) => ({
+          page: Number(item?.page),
+          attempts: Number(item?.attempts),
+          error: typeof item?.error === 'string' ? item.error : '未知错误',
+        }))
+        .filter((item) => Number.isFinite(item.page) && item.page > 0 && Number.isFinite(item.attempts) && item.attempts > 0)
+    } catch {
+      return []
+    }
+  }
+
+  private parseProgressValue(value: string | null): SyncProgress {
+    if (!value) {
+      return {
+        currentPage: null,
+        totalPages: null,
+        syncedPages: 0,
+        syncedItems: 0,
+        currentPageSize: null,
+        lastPageError: null,
+        lastUpdatedAt: null,
+      }
+    }
+
+    try {
+      const parsed = JSON.parse(value)
+      return {
+        currentPage: Number.isFinite(Number(parsed?.currentPage)) ? Number(parsed.currentPage) : null,
+        totalPages: Number.isFinite(Number(parsed?.totalPages)) ? Number(parsed.totalPages) : null,
+        syncedPages: Math.max(0, Number(parsed?.syncedPages) || 0),
+        syncedItems: Math.max(0, Number(parsed?.syncedItems) || 0),
+        currentPageSize: Number.isFinite(Number(parsed?.currentPageSize)) ? Number(parsed.currentPageSize) : null,
+        lastPageError: typeof parsed?.lastPageError === 'string' ? parsed.lastPageError : null,
+        lastUpdatedAt: parsed?.lastUpdatedAt ? this.parseDateValue(parsed.lastUpdatedAt) : null,
+      }
+    } catch {
+      return {
+        currentPage: null,
+        totalPages: null,
+        syncedPages: 0,
+        syncedItems: 0,
+        currentPageSize: null,
+        lastPageError: null,
+        lastUpdatedAt: null,
+      }
+    }
   }
 
   private async getMetadataValue(key: string): Promise<string | null> {
@@ -142,18 +246,24 @@ class DataSync {
       lastSyncDurationMs,
       lastSyncItemCount,
       lastSyncError,
+      lastSyncWarning,
+      failedPages,
       currentSyncStartedAt,
       currentSyncMode,
       currentSyncPhase,
+      progress,
     ] = await Promise.all([
       this.getMetadataValue('last_completed_sync_time'),
       this.getMetadataValue('last_processed_time'),
       this.getMetadataValue('last_sync_duration_ms'),
       this.getMetadataValue('last_sync_item_count'),
       this.getMetadataValue('last_sync_error'),
+      this.getMetadataValue('last_sync_warning'),
+      this.getMetadataValue('failed_pages'),
       this.getMetadataValue('current_sync_started_at'),
       this.getMetadataValue('current_sync_mode'),
       this.getMetadataValue('current_sync_phase'),
+      this.getMetadataValue('sync_progress'),
     ])
 
     this.lastSyncTime = this.parseDateValue(lastCompletedSyncTime)
@@ -161,6 +271,9 @@ class DataSync {
     this.lastSyncDurationMs = this.parseNumberValue(lastSyncDurationMs)
     this.lastSyncItemCount = this.parseNumberValue(lastSyncItemCount)
     this.lastSyncError = lastSyncError
+    this.lastSyncWarning = lastSyncWarning
+    this.failedPages = this.parseFailedPages(failedPages)
+    this.progress = this.parseProgressValue(progress)
     this.currentSyncStartedAt = this.parseDateValue(currentSyncStartedAt)
     this.currentSyncMode = this.normalizeSyncMode(currentSyncMode)
     this.currentSyncPhase = this.normalizeSyncPhase(currentSyncPhase)
@@ -176,12 +289,26 @@ class DataSync {
     this.currentSyncPhase = 'fetching'
     this.currentSyncStartedAt = startedAt
     this.lastSyncError = null
+    this.lastSyncWarning = null
+    this.failedPages = []
+    this.progress = {
+      currentPage: 1,
+      totalPages: null,
+      syncedPages: 0,
+      syncedItems: 0,
+      currentPageSize: null,
+      lastPageError: null,
+      lastUpdatedAt: new Date(),
+    }
 
     await this.setMetadataValues([
       ['current_sync_started_at', startedAtValue],
       ['current_sync_mode', mode],
       ['current_sync_phase', 'fetching'],
       ['last_sync_error', null],
+      ['last_sync_warning', null],
+      ['failed_pages', JSON.stringify(this.failedPages)],
+      ['sync_progress', JSON.stringify(this.serializeProgressForStorage())],
     ])
 
     return startedAt
@@ -203,6 +330,16 @@ class DataSync {
     this.lastSyncDurationMs = durationMs
     this.lastSyncItemCount = itemCount
     this.lastSyncError = null
+    this.lastSyncWarning = null
+    this.failedPages = []
+    this.progress = {
+      ...this.progress,
+      currentPage: null,
+      currentPageSize: null,
+      lastPageError: null,
+      lastUpdatedAt: completedAt,
+      syncedItems: itemCount,
+    }
     this.currentSyncPhase = 'completed'
     this.currentSyncStartedAt = null
 
@@ -214,9 +351,52 @@ class DataSync {
       ['last_sync_duration_ms', String(durationMs)],
       ['last_sync_item_count', String(itemCount)],
       ['last_sync_error', null],
+      ['last_sync_warning', null],
+      ['failed_pages', JSON.stringify([])],
       ['current_sync_started_at', null],
       ['current_sync_phase', 'completed'],
       ['current_sync_mode', this.currentSyncMode],
+      ['sync_progress', JSON.stringify(this.serializeProgressForStorage())],
+    ])
+  }
+
+  private async markSyncPartial(completedAt: Date, durationMs: number, itemCount: number, failedPages: SyncFailedPage[]) {
+    const completedAtValue = dayjs(completedAt).format('YYYY-MM-DD HH:mm:ss')
+    const nextSyncValue = dayjs(completedAt).add(this.getSyncIntervalHours(), 'hour').format('YYYY-MM-DD HH:mm:ss')
+    const warning = `部分分页同步失败：${failedPages.map((item) => item.page).join(', ')}`
+
+    this.isSyncing = false
+    this.lastSyncTime = completedAt
+    this.lastSyncDurationMs = durationMs
+    this.lastSyncItemCount = itemCount
+    this.lastSyncError = null
+    this.lastSyncWarning = warning
+    this.failedPages = failedPages
+    this.progress = {
+      ...this.progress,
+      currentPage: null,
+      currentPageSize: null,
+      lastPageError: failedPages[failedPages.length - 1]?.error || null,
+      lastUpdatedAt: completedAt,
+      syncedItems: itemCount,
+    }
+    this.currentSyncPhase = 'partial'
+    this.currentSyncStartedAt = null
+
+    await this.setMetadataValues([
+      ['last_sync_time', completedAtValue],
+      ['last_completed_sync_time', completedAtValue],
+      ['next_sync_time', nextSyncValue],
+      ['sync_interval_hours', String(this.getSyncIntervalHours())],
+      ['last_sync_duration_ms', String(durationMs)],
+      ['last_sync_item_count', String(itemCount)],
+      ['last_sync_error', null],
+      ['last_sync_warning', warning],
+      ['failed_pages', JSON.stringify(failedPages)],
+      ['current_sync_started_at', null],
+      ['current_sync_phase', 'partial'],
+      ['current_sync_mode', this.currentSyncMode],
+      ['sync_progress', JSON.stringify(this.serializeProgressForStorage())],
     ])
   }
 
@@ -225,14 +405,17 @@ class DataSync {
 
     this.isSyncing = false
     this.lastSyncError = message
+    this.lastSyncWarning = null
     this.currentSyncPhase = 'failed'
     this.currentSyncStartedAt = null
 
     await this.setMetadataValues([
       ['last_sync_error', message],
+      ['last_sync_warning', null],
       ['current_sync_started_at', null],
       ['current_sync_phase', 'failed'],
       ['current_sync_mode', this.currentSyncMode],
+      ['sync_progress', JSON.stringify(this.serializeProgressForStorage())],
     ])
   }
 
@@ -303,6 +486,222 @@ class DataSync {
     }
   }
 
+  private async fetchLogsWithRetry(params: {
+    page: number
+    pageSize: number
+    startDate: string
+    endDate: string
+    syncWindow: SyncWindow
+  }) {
+    let lastError = 'API 响应失败或格式异常'
+
+    for (let attempt = 1; attempt <= SYNC_FETCH_RETRY_LIMIT; attempt++) {
+      try {
+        const response = await fetchLogs({
+          startDate: params.startDate,
+          endDate: params.endDate,
+          startTimestamp: params.syncWindow.start,
+          endTimestamp: params.syncWindow.end,
+          page: params.page,
+          pageSize: params.pageSize,
+        })
+
+        if (response?.success) {
+          return {
+            success: true as const,
+            response,
+            attempts: attempt,
+          }
+        }
+
+        lastError = response?.error || 'API 响应失败或格式异常'
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : 'API 请求失败'
+      }
+
+      await this.updateProgress({ lastPageError: `第 ${params.page} 页重试 ${attempt}/${SYNC_FETCH_RETRY_LIMIT}：${lastError}` })
+
+      if (attempt < SYNC_FETCH_RETRY_LIMIT) {
+        await this.delay(SYNC_FETCH_RETRY_DELAY_MS)
+      }
+    }
+
+    return {
+      success: false as const,
+      error: lastError,
+      attempts: SYNC_FETCH_RETRY_LIMIT,
+    }
+  }
+
+  private async syncWindowByPage(syncWindow: SyncWindow) {
+    const startDate = dayjs(syncWindow.start).format('YYYY-MM-DD')
+    const endDate = dayjs(syncWindow.end).format('YYYY-MM-DD')
+    let page = 1
+    const pageSize = 100
+    let knownTotalPages: number | null = null
+    let consecutiveEmptyPages = 0
+    let probePagesChecked = 0
+    let totalSynced = 0
+    const failedPages: SyncFailedPage[] = []
+
+    while (true) {
+      await this.updateProgress({ currentPage: page })
+
+      const pageResult = await this.fetchLogsWithRetry({
+        page,
+        pageSize,
+        startDate,
+        endDate,
+        syncWindow,
+      })
+
+      if (!pageResult.success) {
+        failedPages.push({
+          page,
+          attempts: pageResult.attempts,
+          error: pageResult.error,
+        })
+
+        await this.updateProgress({ lastPageError: pageResult.error })
+
+        if (knownTotalPages && page >= knownTotalPages) {
+          break
+        }
+
+        probePagesChecked += 1
+        if (probePagesChecked >= SYNC_PROBE_MAX_PAGES) {
+          break
+        }
+
+        page += 1
+        await this.delay(1000)
+        continue
+      }
+
+      const response = pageResult.response
+      const logs = response.data.logs || []
+      const currentPage = Number(response.data.pagination.page || page)
+      const totalPages = Number(response.data.pagination.totalPages || 0)
+
+      knownTotalPages = totalPages || knownTotalPages
+      this.progress.totalPages = knownTotalPages
+      this.progress.currentPageSize = logs.length
+
+      if (logs.length === 0) {
+        consecutiveEmptyPages += 1
+        await this.updateProgress({
+          currentPage,
+          totalPages: knownTotalPages,
+          currentPageSize: 0,
+          lastPageError: null,
+        })
+
+        if (!knownTotalPages) {
+          if (failedPages.length > 0 && consecutiveEmptyPages < SYNC_PROBE_EMPTY_PAGE_LIMIT) {
+            page = currentPage + 1
+            await this.delay(1000)
+            continue
+          }
+
+          break
+        }
+
+        if (currentPage >= knownTotalPages) {
+          break
+        }
+
+        page = currentPage + 1
+        await this.delay(1000)
+        continue
+      }
+
+      consecutiveEmptyPages = 0
+      probePagesChecked = 0
+
+      for (const log of logs) {
+        try {
+          const dbLog = this.transformLogToDbFormat(log)
+          await insertLog(dbLog)
+          await upsertAllModelMetadata({
+            modelId: dbLog.modelId,
+            modelName: dbLog.modelName,
+            provider: dbLog.provider,
+            category: dbLog.category,
+            isActive: true,
+          })
+          totalSynced++
+        } catch (error) {
+          await this.updateProgress({ lastPageError: error instanceof Error ? error.message : '插入日志失败' })
+        }
+      }
+
+      await this.updateProgress({
+        currentPage,
+        totalPages: knownTotalPages,
+        syncedPages: Math.max(this.progress.syncedPages, currentPage),
+        syncedItems: this.progress.syncedItems + logs.length,
+        currentPageSize: logs.length,
+        lastPageError: null,
+      })
+
+      if (knownTotalPages && currentPage >= knownTotalPages) {
+        break
+      }
+
+      page = currentPage + 1
+      await this.delay(1000)
+    }
+
+    return {
+      totalSynced,
+      failedPages,
+    }
+  }
+
+  private buildDailyWindows(start: dayjs.Dayjs, end: dayjs.Dayjs) {
+    const windows: SyncWindow[] = []
+    let cursor = end.startOf('day')
+    const startBoundary = start.startOf('day')
+
+    while (cursor.isAfter(startBoundary) || cursor.isSame(startBoundary)) {
+      const windowStart = cursor.isSame(startBoundary)
+        ? start
+        : cursor.startOf('day')
+      const windowEnd = cursor.isSame(end, 'day')
+        ? end
+        : cursor.endOf('day')
+
+      windows.push({
+        start: windowStart.format('YYYY-MM-DD HH:mm:ss'),
+        end: windowEnd.format('YYYY-MM-DD HH:mm:ss'),
+      })
+
+      cursor = cursor.subtract(1, 'day')
+    }
+
+    return windows
+  }
+
+  private buildIncrementalWindow(lastCompleted: Date | null, manual: boolean) {
+    const syncEnd = dayjs()
+
+    if (!lastCompleted) {
+      return {
+        start: (manual ? dayjs('2026-01-01 00:00:00') : syncEnd.subtract(RECENT_SYNC_MINUTES, 'minute')).format('YYYY-MM-DD HH:mm:ss'),
+        end: syncEnd.format('YYYY-MM-DD HH:mm:ss'),
+      }
+    }
+
+    const last = dayjs(lastCompleted)
+    const boundary = dayjs().subtract(SYNC_MAX_INCREMENTAL_HOURS, 'hour')
+    const startPoint = last.isBefore(boundary) ? boundary : last
+
+    return {
+      start: startPoint.format('YYYY-MM-DD HH:mm:ss'),
+      end: syncEnd.format('YYYY-MM-DD HH:mm:ss'),
+    }
+  }
+
   // 执行一次数据同步
   async syncData(options?: SyncOptions) {
     if (this.isBuildPhase()) {
@@ -310,113 +709,65 @@ class DataSync {
     }
 
     if (this.isSyncing) {
-      console.log('⚠️  同步已在运行中，跳过本次同步')
       return this.getSyncStatus()
     }
 
     const mode: SyncMode = options?.fullSync === true ? 'full' : 'incremental'
     const startedAt = await this.markSyncStarted(mode)
-    let totalSynced = 0
 
     try {
-      console.log('🔄 开始数据同步...')
       await this.syncRemoteMetadata()
 
-      const lastSync = await this.getLastSyncTime()
       const fullSync = options?.fullSync === true
-      const isInitialSync = !lastSync
-      const syncStart = (isInitialSync || fullSync)
-        ? dayjs('2026-01-01 00:00:00')
-        : dayjs().subtract(RECENT_SYNC_MINUTES, 'minute')
-      const syncEnd = dayjs()
-      const startDate = syncStart.format('YYYY-MM-DD')
-      const endDate = syncEnd.format('YYYY-MM-DD')
-      const syncWindow: SyncWindow = {
-        start: syncStart.format('YYYY-MM-DD HH:mm:ss'),
-        end: syncEnd.format('YYYY-MM-DD HH:mm:ss'),
-      }
+      const manual = options?.manual === true
+      const lastCompletedSync = await this.getLastCompletedSyncTime()
 
-      console.log(`📅 同步时间范围: ${syncWindow.start} 至 ${syncWindow.end}`)
+      const windows = fullSync
+        ? this.buildDailyWindows(dayjs('2026-01-01 00:00:00'), dayjs())
+        : [this.buildIncrementalWindow(lastCompletedSync, manual)]
 
-      let page = 1
-      const pageSize = 100
-
+      console.log(`${SYNC_LOG_TAG} start windows=${windows.length} mode=${mode}`)
       await this.markSyncPhase('fetching')
 
-      while (true) {
-        console.log(`📄 获取第 ${page} 页数据...`)
+      const failedPages: SyncFailedPage[] = []
+      let totalSynced = 0
 
-        const response = await fetchLogs({
-          startDate,
-          endDate,
-          startTimestamp: syncWindow.start,
-          endTimestamp: syncWindow.end,
-          page,
-          pageSize,
-        })
+      for (const syncWindow of windows) {
+        console.log(`${SYNC_LOG_TAG} window ${syncWindow.start} -> ${syncWindow.end}`)
+        const result = await this.syncWindowByPage(syncWindow)
+        totalSynced += result.totalSynced
+        failedPages.push(...result.failedPages)
+      }
 
-        if (!response?.success) {
-          console.error('❌ 同步日志接口返回异常:', {
-            page,
-            startDate,
-            endDate,
-            syncWindow,
-            response,
-          })
-          throw new Error(response?.error || 'API 响应失败或格式异常')
-        }
-
-        const logs = response.data.logs || []
-
-        if (logs.length === 0) {
-          console.log('✅ 数据获取完成')
-          break
-        }
-
-        console.log(`📥 获取到 ${logs.length} 条日志`)
-
-        for (const log of logs) {
-          try {
-            const dbLog = this.transformLogToDbFormat(log)
-            await insertLog(dbLog)
-            await upsertAllModelMetadata({
-              modelId: dbLog.modelId,
-              modelName: dbLog.modelName,
-              provider: dbLog.provider,
-              category: dbLog.category,
-              isActive: true,
-            })
-            totalSynced++
-          } catch (error) {
-            console.error('❌ 插入日志失败:', error)
-          }
-        }
-
-        const currentPage = Number(response.data.pagination.page || page)
-        const totalPages = Number(response.data.pagination.totalPages || 0)
-
-        if (!totalPages || currentPage >= totalPages) {
-          break
-        }
-
-        page = currentPage + 1
-        await this.delay(1000)
+      if (totalSynced === 0 && failedPages.length > 0) {
+        throw new Error(failedPages[failedPages.length - 1].error)
       }
 
       await this.markSyncPhase('processing')
 
       if (totalSynced > 0) {
-        await this.processSyncedRange(syncWindow)
+        const firstWindow = windows[windows.length - 1]
+        const lastWindow = windows[0]
+        await this.processSyncedRange({
+          start: firstWindow.start,
+          end: lastWindow.end,
+        })
       }
 
       const completedAt = new Date()
       const duration = completedAt.getTime() - startedAt.getTime()
-      await this.markSyncCompleted(completedAt, duration, totalSynced)
-      console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
+
+      if (failedPages.length > 0) {
+        await this.markSyncPartial(completedAt, duration, totalSynced, failedPages)
+        console.warn(`${SYNC_LOG_TAG} partial items=${totalSynced} failed_pages=${failedPages.map((item) => item.page).join(',')}`)
+      } else {
+        await this.markSyncCompleted(completedAt, duration, totalSynced)
+        console.log(`${SYNC_LOG_TAG} done items=${totalSynced} duration_ms=${duration}`)
+      }
 
       return this.getSyncStatus()
     } catch (error) {
-      console.error('❌ 数据同步失败:', error)
+      console.error(`${SYNC_LOG_TAG} fail`, error)
       await this.markSyncFailed(error)
       return this.getSyncStatus()
     }
@@ -600,6 +951,8 @@ class DataSync {
     }
   }
 
+
+
   private async getLastCompletedSyncTime(): Promise<Date | null> {
     try {
       const value = await this.getMetadataValue('last_completed_sync_time')
@@ -632,7 +985,7 @@ class DataSync {
       return this.getEmptySyncStatus()
     }
 
-    if (!this.lastSyncTime && !this.lastProcessedTime && this.lastSyncDurationMs === null && this.lastSyncItemCount === null && !this.lastSyncError && !this.currentSyncStartedAt) {
+    if (!this.lastSyncTime && !this.lastProcessedTime && this.lastSyncDurationMs === null && this.lastSyncItemCount === null && !this.lastSyncError && !this.lastSyncWarning && !this.currentSyncStartedAt) {
       await this.hydrateSyncState()
     }
 
@@ -650,6 +1003,9 @@ class DataSync {
       lastSyncDurationMs: this.lastSyncDurationMs,
       lastSyncItemCount: this.lastSyncItemCount,
       lastSyncError: this.lastSyncError,
+      lastSyncWarning: this.lastSyncWarning,
+      failedPages: this.failedPages,
+      progress: this.progress,
       nextSyncTime,
       syncIntervalHours: this.getSyncIntervalHours(),
     }
@@ -702,6 +1058,30 @@ class DataSync {
   }
 
   // 延迟函数
+  private serializeProgressForStorage() {
+    return {
+      currentPage: this.progress.currentPage,
+      totalPages: this.progress.totalPages,
+      syncedPages: this.progress.syncedPages,
+      syncedItems: this.progress.syncedItems,
+      currentPageSize: this.progress.currentPageSize,
+      lastPageError: this.progress.lastPageError,
+      lastUpdatedAt: this.progress.lastUpdatedAt ? dayjs(this.progress.lastUpdatedAt).format('YYYY-MM-DD HH:mm:ss') : null,
+    }
+  }
+
+  private async updateProgress(partial: Partial<SyncProgress>) {
+    this.progress = {
+      ...this.progress,
+      ...partial,
+      lastUpdatedAt: new Date(),
+    }
+
+    await this.setMetadataValues([
+      ['sync_progress', JSON.stringify(this.serializeProgressForStorage())],
+    ])
+  }
+
   private delay(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms))
   }

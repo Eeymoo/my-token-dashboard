@@ -65,7 +65,22 @@ export interface LogRecord {
   statusCode: number
 }
 
-// ==================== API 请求参数 ====================
+export interface SyncFailedPageStatus {
+  page: number
+  attempts: number
+  error: string
+}
+
+export interface SyncProgressStatus {
+  currentPage: number | null
+  totalPages: number | null
+  syncedPages: number
+  syncedItems: number
+  currentPageSize: number | null
+  lastPageError: string | null
+  lastUpdatedAt: string | null
+}
+
 export interface LogQueryParams {
   startDate: string // YYYY-MM-DD
   endDate: string // YYYY-MM-DD
@@ -101,6 +116,7 @@ export interface LogQueryResponse {
       total: number
       totalPages: number
     }
+    syncStatus?: SyncProgressStatus
   }
   error?: string
 }
@@ -166,7 +182,7 @@ export interface SummaryResponse {
     modelTimeSeries: ModelTimeSeriesPoint[]
     syncStatus: {
       isSyncing: boolean
-      phase: 'idle' | 'fetching' | 'processing' | 'completed' | 'failed'
+      phase: 'idle' | 'fetching' | 'processing' | 'completed' | 'partial' | 'failed'
       mode: 'incremental' | 'full' | 'rebuild'
       currentSyncStartedAt: string | null
       lastCompletedSyncTime: string | null
@@ -174,8 +190,11 @@ export interface SummaryResponse {
       lastSyncDurationMs: number | null
       lastSyncItemCount: number | null
       lastSyncError: string | null
+      lastSyncWarning: string | null
+      failedPages: SyncFailedPageStatus[]
       nextSyncTime: string | null
       syncIntervalHours: number
+      progress?: SyncProgressStatus
     }
   }
   error?: string

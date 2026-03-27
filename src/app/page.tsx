@@ -115,15 +115,19 @@ export default function Home() {
     ? (syncStatus.mode === 'full' ? '全量同步中' : '同步中')
     : syncStatus?.phase === 'processing'
       ? (syncStatus.mode === 'rebuild' ? '重建处理中' : '后台处理中')
-      : syncStatus?.phase === 'failed'
-        ? '同步失败'
-        : '空闲'
+      : syncStatus?.phase === 'partial'
+        ? '部分完成'
+        : syncStatus?.phase === 'failed'
+          ? '同步失败'
+          : '空闲'
 
   const syncTagColor = syncStatus?.phase === 'failed'
     ? 'error'
-    : syncStatus?.isSyncing
-      ? 'processing'
-      : 'success'
+    : syncStatus?.phase === 'partial'
+      ? 'warning'
+      : syncStatus?.isSyncing
+        ? 'processing'
+        : 'success'
 
   // TODO(feat): [CHECKLIST 16.3/16.4] 将 modelTimeSeries 转换成图表可用的分时/累计数据集。
   const modelChartData = useMemo(() => {
@@ -397,12 +401,38 @@ export default function Home() {
             <div className="text-sm text-gray-600 dark:text-gray-300">最后完成：{lastUpdatedLabel}</div>
             <div className="text-sm text-gray-600 dark:text-gray-300">整体用时：{formatDuration(syncStatus?.lastSyncDurationMs)}</div>
             <div className="text-sm text-gray-600 dark:text-gray-300">处理条数：{syncStatus?.lastSyncItemCount ?? '--'}</div>
+            {syncStatus?.progress ? (
+              <div className="text-sm text-gray-600 dark:text-gray-300">
+                分页进度：第 {syncStatus.progress.currentPage ?? '--'} 页 / {syncStatus.progress.totalPages ?? '--'} 页，已完成 {syncStatus.progress.syncedPages} 页，已同步 {syncStatus.progress.syncedItems} 条
+              </div>
+            ) : null}
+            {syncStatus?.phase === 'partial' && syncStatus.lastSyncWarning ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="最近一次同步部分完成"
+                description={[
+                  syncStatus.lastSyncWarning,
+                  syncStatus.failedPages?.length
+                    ? `失败分页：${syncStatus.failedPages.map((item) => `${item.page}（重试 ${item.attempts} 次）`).join('，')}`
+                    : null,
+                ].filter(Boolean).join('；')}
+              />
+            ) : null}
             {syncStatus?.lastSyncError ? (
               <Alert
                 type="error"
                 showIcon
                 message="最近一次同步失败"
                 description={syncStatus.lastSyncError}
+              />
+            ) : null}
+            {syncStatus?.progress?.lastPageError && syncStatus.phase !== 'failed' ? (
+              <Alert
+                type="info"
+                showIcon
+                message="最近分页提示"
+                description={syncStatus.progress.lastPageError}
               />
             ) : null}
           </Space>

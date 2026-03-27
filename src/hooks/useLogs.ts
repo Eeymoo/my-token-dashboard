@@ -13,6 +13,7 @@ type SyncStatusResponse = {
 
 type TriggerSyncParams = {
   fullSync?: boolean
+  manual?: boolean
   rebuild?: boolean
   startDate?: string
   endDate?: string

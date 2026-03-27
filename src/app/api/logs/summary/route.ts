@@ -143,8 +143,14 @@ export async function GET(request: NextRequest) {
           lastSyncDurationMs: syncStatus.lastSyncDurationMs,
           lastSyncItemCount: syncStatus.lastSyncItemCount,
           lastSyncError: syncStatus.lastSyncError,
+          lastSyncWarning: syncStatus.lastSyncWarning,
+          failedPages: syncStatus.failedPages,
           nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
           syncIntervalHours: syncStatus.syncIntervalHours,
+          progress: {
+            ...syncStatus.progress,
+            lastUpdatedAt: syncStatus.progress.lastUpdatedAt?.toISOString() || null,
+          },
         },
       },
     })

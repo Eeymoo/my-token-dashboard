@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import dataSync from '@/lib/sync'
 
+let manualSyncPromise: Promise<void> | null = null
+
 function validateApiKey(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -24,6 +26,12 @@ function serializeSyncStatus(syncStatus: Awaited<ReturnType<typeof dataSync.getS
     lastSyncDurationMs: syncStatus.lastSyncDurationMs,
     lastSyncItemCount: syncStatus.lastSyncItemCount,
     lastSyncError: syncStatus.lastSyncError,
+    lastSyncWarning: syncStatus.lastSyncWarning,
+    failedPages: syncStatus.failedPages,
+    progress: {
+      ...syncStatus.progress,
+      lastUpdatedAt: syncStatus.progress.lastUpdatedAt?.toISOString() || null,
+    },
     nextSyncTime: syncStatus.nextSyncTime?.toISOString() || null,
     syncIntervalHours: syncStatus.syncIntervalHours,
   }
@@ -70,6 +78,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const fullSync = body.fullSync === true
+    const manual = body.manual !== false
 
     const initialized = await dataSync.initialize()
     if (!initialized) {
@@ -92,20 +101,38 @@ export async function POST(request: NextRequest) {
 
       syncStatus = await dataSync.rebuildDerivedData(body.startDate, body.endDate)
       message = syncStatus.isSyncing ? '派生数据重建已开始' : '派生数据重建已完成'
+    } else if (manual) {
+      if (!manualSyncPromise) {
+        manualSyncPromise = dataSync.syncData({ fullSync, manual: true })
+          .then(() => undefined)
+          .catch((error) => {
+            console.error('异步手动同步失败:', error)
+          })
+          .finally(() => {
+            manualSyncPromise = null
+          })
+      }
+
+      syncStatus = await dataSync.getSyncStatus()
+      message = '数据同步已异步开始'
     } else {
-      syncStatus = await dataSync.syncData({ fullSync })
+      syncStatus = await dataSync.syncData({ fullSync, manual: false })
       message = syncStatus.isSyncing ? '数据同步已开始' : '数据同步已完成'
     }
 
+    const hasFailedSync = Boolean(syncStatus.lastSyncError)
+    const hasPartialFailure = syncStatus.phase === 'partial'
+
     return NextResponse.json({
-      success: !syncStatus.lastSyncError,
-      message,
+      success: !hasFailedSync,
+      message: hasPartialFailure ? '数据同步部分完成' : message,
       error: syncStatus.lastSyncError || undefined,
+      warning: syncStatus.lastSyncWarning || undefined,
       data: {
         syncStatus: serializeSyncStatus(syncStatus),
       },
     }, {
-      status: syncStatus.lastSyncError ? 500 : 200,
+      status: hasFailedSync ? 500 : 200,
     })
   } catch (error) {
     console.error('配置同步失败:', error)
