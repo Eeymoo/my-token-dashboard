@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { query, upsertAllModelMetadata } from '@/lib/db'
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
+    const includeAll = request.nextUrl.searchParams.get('all') === 'true'
     let modelsResult
 
     try {
@@ -16,7 +17,11 @@ export async function GET(_request: NextRequest) {
           mc.is_active
         FROM model_catalog mc
         JOIN vendors v ON v.vendor_id = mc.vendor_id
-        WHERE mc.is_active = true
+        ${includeAll ? '' : `WHERE mc.is_active = true AND EXISTS (
+          SELECT 1
+          FROM api_logs al
+          WHERE al.model_id = mc.model_id
+        )`}
         ORDER BY mc.model_name
       `) as any[]
     } catch (error) {
@@ -26,7 +31,11 @@ export async function GET(_request: NextRequest) {
         modelsResult = await query(`
           SELECT model_id, model_name, provider, category, description, is_active
           FROM models
-          WHERE is_active = true
+          ${includeAll ? '' : `WHERE is_active = true AND EXISTS (
+            SELECT 1
+            FROM api_logs al
+            WHERE al.model_id = models.model_id
+          )`}
           ORDER BY model_name
         `) as any[]
       } catch (legacyError) {
@@ -54,7 +63,7 @@ export async function GET(_request: NextRequest) {
     }))
 
     // 如果没有模型数据，返回默认模型列表
-    if (models.length === 0) {
+    if (models.length === 0 && includeAll) {
       models.push(
         { modelId: 'gpt-4', modelName: 'GPT-4', provider: 'OpenAI', category: 'text', description: 'OpenAI的GPT-4模型，强大的文本生成能力', isActive: true },
         { modelId: 'claude-3', modelName: 'Claude 3', provider: 'Anthropic', category: 'text', description: 'Anthropic的Claude 3模型，优秀的对话和推理能力', isActive: true },

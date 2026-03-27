@@ -30,13 +30,6 @@ function serializeSyncStatus(syncStatus: Awaited<ReturnType<typeof dataSync.getS
 }
 
 export async function GET(request: NextRequest) {
-  if (!validateApiKey(request)) {
-    return NextResponse.json(
-      { success: false, error: '未授权访问' },
-      { status: 401 }
-    )
-  }
-
   try {
     const initialized = await dataSync.initialize()
     if (!initialized) {
@@ -105,11 +98,14 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success: true,
+      success: !syncStatus.lastSyncError,
       message,
+      error: syncStatus.lastSyncError || undefined,
       data: {
         syncStatus: serializeSyncStatus(syncStatus),
       },
+    }, {
+      status: syncStatus.lastSyncError ? 500 : 200,
     })
   } catch (error) {
     console.error('配置同步失败:', error)

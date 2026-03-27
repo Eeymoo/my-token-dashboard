@@ -356,7 +356,14 @@ class DataSync {
         })
 
         if (!response?.success) {
-          throw new Error('API 响应失败或格式异常')
+          console.error('❌ 同步日志接口返回异常:', {
+            page,
+            startDate,
+            endDate,
+            syncWindow,
+            response,
+          })
+          throw new Error(response?.error || 'API 响应失败或格式异常')
         }
 
         const logs = response.data.logs || []

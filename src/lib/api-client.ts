@@ -68,8 +68,11 @@ apiClient.interceptors.response.use(
   (error) => {
     console.error('❌ 响应错误:', {
       url: error.config?.url,
+      method: error.config?.method,
+      params: error.config?.params,
       status: error.response?.status,
       message: error.message,
+      data: error.response?.data,
     })
     return Promise.reject(error)
   }
