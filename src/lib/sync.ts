@@ -69,12 +69,18 @@ class DataSync {
           pageSize,
         })
 
-        if (!response?.success) {
-          console.log('⚠️ API 响应失败或格式异常，停止同步')
+        const logs = Array.isArray(response?.data?.logs) ? response.data.logs : []
+        const pagination = response?.data?.pagination
+
+        if (!response) {
+          console.log('⚠️ API 未返回有效响应，停止同步')
           break
         }
 
-        const logs = response.data.logs || []
+        if (!response.success && logs.length === 0) {
+          console.log('⚠️ API 响应失败且无可用数据，停止同步')
+          break
+        }
 
         if (logs.length === 0) {
           console.log('✅ 数据获取完成')
@@ -95,17 +101,17 @@ class DataSync {
           }
         }
 
-        const currentPage = Number(response.data.pagination.page || page)
-        const totalPages = Number(response.data.pagination.totalPages || 0)
+        const currentPage = Number(pagination?.page || page)
+        const totalPages = Number(pagination?.totalPages || 0)
 
         if (!totalPages || currentPage >= totalPages) {
           break
         }
 
         page = currentPage + 1
-      // 避免请求过于频繁
-      await this.delay(1000)
-    }
+        // 避免请求过于频繁
+        await this.delay(1000)
+      }
 
     // 更新最后同步时间
     await this.updateLastSyncTime(endDate)
