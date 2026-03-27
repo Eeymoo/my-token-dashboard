@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import dynamic from 'next/dynamic'
 import { Row, Col, Card, Statistic, DatePicker, Select, Space, Button, Segmented, Switch, Spin, Alert, Empty, Checkbox } from 'antd'
 import { ReloadOutlined, DollarOutlined, BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import ReactECharts from 'echarts-for-react'
+const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false })
 import { useSummary, useModels } from '@/hooks/useLogs'
 import './globals.css'
 
