@@ -29,7 +29,7 @@ function serializeSyncStatus(syncStatus: Awaited<ReturnType<typeof dataSync.getS
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const initialized = await dataSync.initialize()
     if (!initialized) {
