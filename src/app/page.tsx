@@ -152,7 +152,14 @@ export default function Home() {
         hourModelValueMap.set(item.hour, new Map<string, number>())
       }
 
-      hourModelValueMap.get(item.hour)!.set(item.modelId, item.totalTokens)
+      const metricValue =
+        timeTrendMetric === 'tokens'
+          ? item.totalTokens
+          : timeTrendMetric === 'cost'
+            ? (currency === 'USD' ? item.totalCost : item.totalCost * 7.2)
+            : item.requestCount
+
+      hourModelValueMap.get(item.hour)!.set(item.modelId, metricValue)
     })
 
     const hours = Array.from(hourSet).sort((a, b) => dayjs(a).valueOf() - dayjs(b).valueOf())
@@ -186,7 +193,7 @@ export default function Home() {
     })
 
     return { hours, models, rows, modelNameMap }
-  }, [modelChartMode, modelTimeSeries])
+  }, [currency, modelChartMode, modelTimeSeries, timeTrendMetric])
 
   // TODO(feat): [CHECKLIST 16.5/16.6] 基于堆叠开关与时间轴需求生成 ECharts 配置。
   const modelUsageChartOption = useMemo(() => {

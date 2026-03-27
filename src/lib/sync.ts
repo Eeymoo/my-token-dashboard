@@ -522,6 +522,12 @@ class DataSync {
       } catch (error) {
         lastError = error instanceof Error ? error.message : 'API 请求失败'
       }
+      await this.updateProgress({ lastPageError: `第 ${params.page} 页重试 ${attempt}/${SYNC_FETCH_RETRY_LIMIT}：${lastError}` })
+
+      if (attempt < SYNC_FETCH_RETRY_LIMIT) {
+        await this.delay(SYNC_FETCH_RETRY_DELAY_MS)
+      }
+    }
 
     return {
       success: false as const,
