@@ -1,7 +1,21 @@
 import cron from 'node-cron'
 import { fetchLogs } from './api-client'
-import { insertLog, query, initDatabase, testConnection } from './db'
+import { insertLog, query, initDatabase, testConnection, upsertAggregatedRange } from './db'
 import dayjs from 'dayjs'
+
+const AGGREGATION_PERIODS = ['hour', 'day', 'week', 'month'] as const
+const RECENT_SYNC_MINUTES = 30
+
+type AggregationPeriod = typeof AGGREGATION_PERIODS[number]
+
+type SyncWindow = {
+  start: string
+  end: string
+}
+
+type SyncOptions = {
+  fullSync?: boolean
+}
 
 // 数据同步器类
 class DataSync {
@@ -22,14 +36,12 @@ class DataSync {
   async initialize() {
     console.log('🔄 初始化数据同步器...')
 
-    // 测试数据库连接
     const dbConnected = await testConnection()
     if (!dbConnected) {
       console.error('❌ 数据库连接失败，无法初始化同步器')
       return false
     }
 
-    // 初始化数据库表
     try {
       await initDatabase()
       await this.ensureMetadataTable()
@@ -43,7 +55,7 @@ class DataSync {
   }
 
   // 执行一次数据同步
-  async syncData() {
+  async syncData(options?: SyncOptions) {
     if (this.isSyncing) {
       console.log('⚠️  同步已在运行中，跳过本次同步')
       return
@@ -56,15 +68,22 @@ class DataSync {
     try {
       console.log('🔄 开始数据同步...')
 
-      // 获取上次同步的时间（如果没有，则从2026-01-01开始）
       const lastSync = await this.getLastSyncTime()
-      const startDate = lastSync ? dayjs(lastSync).format('YYYY-MM-DD') : '2026-01-01'
-      const endDate = dayjs(completedAt).format('YYYY-MM-DD')
+      const fullSync = options?.fullSync === true
+      const isInitialSync = !lastSync
+      const syncStart = (isInitialSync || fullSync)
+        ? dayjs('2026-01-01 00:00:00')
+        : dayjs().subtract(RECENT_SYNC_MINUTES, 'minute')
+      const syncEnd = dayjs(completedAt)
+      const startDate = syncStart.format('YYYY-MM-DD')
+      const endDate = syncEnd.format('YYYY-MM-DD')
+      const syncWindow: SyncWindow = {
+        start: syncStart.format('YYYY-MM-DD HH:mm:ss'),
+        end: syncEnd.format('YYYY-MM-DD HH:mm:ss'),
+      }
 
-      console.log(`📅 同步时间范围: ${startDate} 至 ${endDate}`)
+      console.log(`📅 同步时间范围: ${syncWindow.start} 至 ${syncWindow.end}`)
 
-      // 从 API 获取数据
-      // 这里需要根据实际 API 分页获取所有数据
       let page = 1
       const pageSize = 100
       let totalSynced = 0
@@ -75,6 +94,8 @@ class DataSync {
         const response = await fetchLogs({
           startDate,
           endDate,
+          startTimestamp: syncWindow.start,
+          endTimestamp: syncWindow.end,
           page,
           pageSize,
         })
@@ -93,7 +114,6 @@ class DataSync {
 
         console.log(`📥 获取到 ${logs.length} 条日志`)
 
-        // 处理并存储日志
         for (const log of logs) {
           try {
             const dbLog = this.transformLogToDbFormat(log)
@@ -115,24 +135,23 @@ class DataSync {
         await this.delay(1000)
       }
 
-      await this.updateSyncMetadata(completedAt)
+      await this.updateSyncMetadata(syncEnd.toDate())
 
       const duration = Date.now() - startTime
       console.log(`✅ 数据同步完成，共同步 ${totalSynced} 条记录，耗时 ${duration}ms`)
 
-      try {
-        await this.ensureMetadataTable()
-        await this.aggregateData()
-      } catch (aggError) {
-        console.error('❌ 数据聚合失败:', aggError)
+      if (totalSynced > 0) {
+        this.processSyncedRange(syncWindow).catch((error) => {
+          console.error('❌ 后台计算失败:', error)
+        })
       }
     } catch (error) {
       console.error('❌ 数据同步失败:', error)
     } finally {
       this.isSyncing = false
+      this.lastSyncTime = completedAt
     }
   }
-
 
   private async ensureMetadataTable() {
     if (this.metadataTableReady) return
@@ -147,6 +166,29 @@ class DataSync {
     `)
 
     this.metadataTableReady = true
+  }
+
+  private async processSyncedRange(syncWindow: SyncWindow) {
+    console.log(`🧮 开始后台处理: ${syncWindow.start} - ${syncWindow.end}`)
+
+    await this.ensureMetadataTable()
+    await this.backfillCosts(syncWindow)
+    await this.aggregateData(syncWindow)
+    await this.updateProcessingTime(syncWindow.end)
+
+    console.log('✅ 后台处理完成')
+  }
+
+  private async backfillCosts(syncWindow: SyncWindow) {
+    await query(
+      `UPDATE api_logs
+       SET prompt_cost = 0,
+           completion_cost = 0,
+           total_cost = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE timestamp BETWEEN STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s') AND STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s')`,
+      [syncWindow.start, syncWindow.end]
+    )
   }
 
   // 将日志转换为数据库格式
@@ -195,27 +237,6 @@ class DataSync {
       log.completion_tokens ??
       log.completedTokens ??
       log.completionTokens,
-      0
-    )
-
-    const totalCost = toNumberOr(
-      log.cost?.totalCost ??
-      log.total_cost ??
-      log.totalCost,
-      0
-    )
-
-    const promptCost = toNumberOr(
-      log.cost?.promptCost ??
-      log.prompt_cost ??
-      log.promptCost,
-      0
-    )
-
-    const completionCost = toNumberOr(
-      log.cost?.completionCost ??
-      log.completion_cost ??
-      log.completionCost,
       0
     )
 
@@ -278,9 +299,9 @@ class DataSync {
       totalTokens,
       promptTokens,
       completionTokens,
-      totalCost,
-      promptCost,
-      completionCost,
+      totalCost: 0,
+      promptCost: 0,
+      completionCost: 0,
       requestCount,
       successCount,
       errorCount,
@@ -328,6 +349,13 @@ class DataSync {
     }
   }
 
+  private async updateProcessingTime(time: string) {
+    await query(
+      "INSERT INTO sync_metadata (`key`, `value`) VALUES ('last_processed_time', ?) ON DUPLICATE KEY UPDATE `value` = ?",
+      [time, time]
+    )
+  }
+
   private async updateSyncMetadata(completedAt: Date) {
     const completedAtValue = dayjs(completedAt).format('YYYY-MM-DD HH:mm:ss')
     const nextSyncValue = dayjs(completedAt).add(this.getSyncIntervalHours(), 'hour').format('YYYY-MM-DD HH:mm:ss')
@@ -364,23 +392,15 @@ class DataSync {
   }
 
   // 聚合数据（按小时/天/周/月）
-  async aggregateData() {
+  async aggregateData(syncWindow: SyncWindow) {
     console.log('🧮 开始数据聚合...')
 
     try {
       await query("SET SESSION sql_mode = REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY', '')")
 
-      // 按小时聚合
-      await this.aggregateByPeriod('hour')
-
-      // 按天聚合
-      await this.aggregateByPeriod('day')
-
-      // 按周聚合
-      await this.aggregateByPeriod('week')
-
-      // 按月聚合
-      await this.aggregateByPeriod('month')
+      for (const period of AGGREGATION_PERIODS) {
+        await this.aggregateByPeriod(period, syncWindow)
+      }
 
       console.log('✅ 数据聚合完成')
     } catch (error) {
@@ -389,61 +409,32 @@ class DataSync {
   }
 
   // 按时间段聚合
-  private async aggregateByPeriod(periodType: 'hour' | 'day' | 'week' | 'month') {
-    const periodMap = {
-      hour: 'HOUR',
-      day: 'DAY',
-      week: 'WEEK',
-      month: 'MONTH',
+  private async aggregateByPeriod(periodType: AggregationPeriod, syncWindow: SyncWindow) {
+    const rangeStart = this.getPeriodBoundary(syncWindow.start, periodType, false)
+    const rangeEnd = this.getPeriodBoundary(syncWindow.end, periodType, true)
+
+    await upsertAggregatedRange(periodType, rangeStart, rangeEnd)
+    console.log(`✅ ${periodType}聚合完成`)
+  }
+
+  private getPeriodBoundary(value: string, periodType: AggregationPeriod, endOfPeriod: boolean) {
+    const date = dayjs(value)
+
+    if (periodType === 'hour') {
+      return (endOfPeriod ? date.endOf('hour') : date.startOf('hour')).format('YYYY-MM-DD HH:mm:ss')
     }
 
-    const format = periodType === 'hour' ? '%Y-%m-%d %H:00:00' :
-                  periodType === 'day' ? '%Y-%m-%d 00:00:00' :
-                  periodType === 'week' ? '%Y-%u 00:00:00' :
-                  '%Y-%m-01 00:00:00'
+    if (periodType === 'day') {
+      return (endOfPeriod ? date.endOf('day') : date.startOf('day')).format('YYYY-MM-DD HH:mm:ss')
+    }
 
-    const sql = `
-      INSERT INTO aggregated_data (
-        period_type, period_start, period_end, model_id,
-        total_tokens, total_cost, request_count, success_count, error_count, avg_latency
-      )
-      SELECT
-        ? as period_type,
-        grouped.period_start,
-        DATE_FORMAT(DATE_ADD(grouped.period_start, INTERVAL 1 ${periodMap[periodType]}), ?) as period_end,
-        grouped.model_id,
-        grouped.total_tokens,
-        grouped.total_cost,
-        grouped.request_count,
-        grouped.success_count,
-        grouped.error_count,
-        grouped.avg_latency
-      FROM (
-        SELECT
-          STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s') as period_start,
-          model_id,
-          SUM(total_tokens) as total_tokens,
-          SUM(total_cost) as total_cost,
-          SUM(request_count) as request_count,
-          SUM(success_count) as success_count,
-          SUM(error_count) as error_count,
-          AVG(avg_latency) as avg_latency
-        FROM api_logs
-        WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-        GROUP BY STR_TO_DATE(DATE_FORMAT(timestamp, ?), '%Y-%m-%d %H:%i:%s'), model_id
-      ) grouped
-      ON DUPLICATE KEY UPDATE
-        total_tokens = VALUES(total_tokens),
-        total_cost = VALUES(total_cost),
-        request_count = VALUES(request_count),
-        success_count = VALUES(success_count),
-        error_count = VALUES(error_count),
-        avg_latency = VALUES(avg_latency),
-        updated_at = CURRENT_TIMESTAMP
-    `
+    if (periodType === 'week') {
+      const weekStart = date.day(0).startOf('day')
+      const weekEnd = weekStart.add(6, 'day').endOf('day')
+      return (endOfPeriod ? weekEnd : weekStart).format('YYYY-MM-DD HH:mm:ss')
+    }
 
-    await query(sql, [periodType, format, format, format])
-    console.log(`✅ ${periodType}聚合完成`)
+    return (endOfPeriod ? date.endOf('month') : date.startOf('month')).format('YYYY-MM-DD HH:mm:ss')
   }
 
   // 延迟函数
@@ -470,6 +461,15 @@ class DataSync {
     return this.isSyncing
   }
 
+  async rebuildDerivedData(startDate: string, endDate: string) {
+    const syncWindow: SyncWindow = {
+      start: `${startDate} 00:00:00`,
+      end: `${endDate} 23:59:59`,
+    }
+
+    await this.processSyncedRange(syncWindow)
+  }
+
   // 启动定时同步
   startScheduledSync() {
     const intervalHours = this.getSyncIntervalHours()
@@ -479,7 +479,6 @@ class DataSync {
       return
     }
 
-    // 转换为 cron 表达式（每小时运行一次）
     const cronExpression = `0 */${intervalHours} * * *`
 
     console.log(`⏰ 设置定时同步: ${cronExpression} (每 ${intervalHours} 小时)`)
@@ -489,7 +488,6 @@ class DataSync {
       this.syncData()
     })
 
-    // 立即执行一次同步
     console.log('🚀 立即执行首次同步...')
     this.syncData()
   }

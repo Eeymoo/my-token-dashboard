@@ -4,9 +4,9 @@ import dataSync from '@/lib/sync'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const searchParams = _request.nextUrl.searchParams
+    const searchParams = request.nextUrl.searchParams
     const startDate = searchParams.get('startDate') || '2026-01-01'
     const endDate = searchParams.get('endDate') || new Date().toISOString().split('T')[0]
     const models = (searchParams.get('models') || '')
@@ -14,17 +14,15 @@ export async function GET(_request: NextRequest) {
       .map((model) => model.trim())
       .filter(Boolean)
 
-    // 构建查询条件
-    let whereClause = 'WHERE timestamp BETWEEN ? AND ?'
-    const queryParams: any[] = [`${startDate} 00:00:00`, `${endDate} 23:59:59`]
+    const summaryParams: any[] = ['day', `${startDate} 00:00:00`, `${endDate} 23:59:59`]
+    let summaryFilter = 'WHERE period_type = ? AND period_start BETWEEN ? AND ?'
 
     if (models.length > 0) {
       const placeholders = models.map(() => '?').join(', ')
-      whereClause += ` AND model_id IN (${placeholders})`
-      queryParams.push(...models)
+      summaryFilter += ` AND model_id IN (${placeholders})`
+      summaryParams.push(...models)
     }
 
-    // 获取总览数据
     const summaryResult = await query(
       `SELECT
         SUM(total_tokens) as totalTokens,
@@ -33,8 +31,8 @@ export async function GET(_request: NextRequest) {
         SUM(success_count) as successRequests,
         SUM(error_count) as errorRequests,
         AVG(avg_latency) as avgLatency
-       FROM api_logs ${whereClause}`,
-      queryParams
+       FROM aggregated_data ${summaryFilter}`,
+      summaryParams
     ) as any[]
 
     const summary = summaryResult[0] || {
@@ -46,47 +44,54 @@ export async function GET(_request: NextRequest) {
       avgLatency: 0,
     }
 
-    // 获取分模型数据
+    const breakdownParams: any[] = [`${startDate} 00:00:00`, `${endDate} 23:59:59`]
+    let breakdownFilter = 'WHERE timestamp BETWEEN ? AND ?'
+
+    if (models.length > 0) {
+      const placeholders = models.map(() => '?').join(', ')
+      breakdownFilter += ` AND model_id IN (${placeholders})`
+      breakdownParams.push(...models)
+    }
+
     const breakdownResult = await query(
       `SELECT
         model_id,
-        model_name,
+        MAX(model_name) as model_name,
         SUM(total_tokens) as totalTokens,
         SUM(total_cost) as totalCost,
         SUM(request_count) as requestCount
-       FROM api_logs ${whereClause}
-       GROUP BY model_id, model_name
+       FROM api_logs ${breakdownFilter}
+       GROUP BY model_id
        ORDER BY totalTokens DESC
        LIMIT 20`,
-      queryParams
+      breakdownParams
     ) as any[]
 
     const modelBreakdown = breakdownResult.map((row: any) => ({
       modelId: row.model_id,
       modelName: row.model_name,
-      totalTokens: row.totalTokens || 0,
-      totalCost: row.totalCost || 0,
-      requestCount: row.requestCount || 0,
+      totalTokens: Number(row.totalTokens) || 0,
+      totalCost: Number(row.totalCost) || 0,
+      requestCount: Number(row.requestCount) || 0,
     }))
 
-    // 获取时间序列数据（按天）
     const timeSeriesResult = await query(
       `SELECT
-        DATE(timestamp) as date,
+        DATE(period_start) as date,
         SUM(total_tokens) as totalTokens,
         SUM(total_cost) as totalCost,
         SUM(request_count) as requestCount
-       FROM api_logs ${whereClause}
-       GROUP BY DATE(timestamp)
+       FROM aggregated_data ${summaryFilter}
+       GROUP BY DATE(period_start)
        ORDER BY date`,
-      queryParams
+      summaryParams
     ) as any[]
 
     const timeSeries = timeSeriesResult.map((row: any) => ({
       date: row.date,
-      totalTokens: row.totalTokens || 0,
-      totalCost: row.totalCost || 0,
-      requestCount: row.requestCount || 0,
+      totalTokens: Number(row.totalTokens) || 0,
+      totalCost: Number(row.totalCost) || 0,
+      requestCount: Number(row.requestCount) || 0,
     }))
 
     // 获取分模型按小时时间序列
