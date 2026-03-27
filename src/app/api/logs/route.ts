@@ -1,6 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 import dayjs from 'dayjs'
+import dataSync from '@/lib/sync'
+
+function serializeSyncProgress(syncStatus: Awaited<ReturnType<typeof dataSync.getSyncStatus>>) {
+  return {
+    isSyncing: syncStatus.isSyncing,
+    phase: syncStatus.phase,
+    mode: syncStatus.mode,
+    lastSyncError: syncStatus.lastSyncError,
+    lastSyncWarning: syncStatus.lastSyncWarning,
+    failedPages: syncStatus.failedPages,
+    progress: {
+      currentPage: syncStatus.progress.currentPage,
+      totalPages: syncStatus.progress.totalPages,
+      syncedPages: syncStatus.progress.syncedPages,
+      syncedItems: syncStatus.progress.syncedItems,
+      currentPageSize: syncStatus.progress.currentPageSize,
+      lastPageError: syncStatus.progress.lastPageError,
+      lastUpdatedAt: syncStatus.progress.lastUpdatedAt?.toISOString() || null,
+    },
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -27,6 +48,8 @@ export async function GET(request: NextRequest) {
       whereClause += ` AND model_id IN (${placeholders})`
       queryParams.push(...models)
     }
+
+    const syncStatusPromise = dataSync.getSyncStatus()
 
     // 获取总记录数
     const countResult = await query(
@@ -87,6 +110,7 @@ export async function GET(request: NextRequest) {
           total,
           totalPages: Math.ceil(total / pageSize),
         },
+        syncStatus: serializeSyncProgress(await syncStatusPromise),
       },
     })
 

@@ -420,16 +420,16 @@ class DataSync {
   }
 
   async initialize() {
-    console.log('🔄 初始化数据同步器...')
+    console.log(`${SYNC_LOG_TAG} init`)
 
     if (this.isBuildPhase()) {
-      console.log('⚠️  检测到构建阶段，跳过数据库连接')
+      console.log(`${SYNC_LOG_TAG} build_phase skip DB`)
       return true
     }
 
     const dbConnected = await testConnection()
     if (!dbConnected) {
-      console.error('❌ 数据库连接失败，无法初始化同步器')
+      console.error(`${SYNC_LOG_TAG} db_connect_failed`)
       return false
     }
 
@@ -438,11 +438,11 @@ class DataSync {
       await this.ensureMetadataTable()
       await this.hydrateSyncState()
     } catch (error) {
-      console.error('❌ 数据库表初始化失败:', error)
+      console.error(`${SYNC_LOG_TAG} init_failed`, error)
       return false
     }
 
-    console.log('✅ 数据同步器初始化完成')
+    console.log(`${SYNC_LOG_TAG} ready`)
     return true
   }
 
@@ -463,6 +463,8 @@ class DataSync {
         iconUrl: provider.iconURL || null,
       })
     }
+
+    console.log(`${SYNC_LOG_TAG} metadata providers=${providers.length} models=${models.length}`)
 
     for (const model of models) {
       const provider = providerMap.get(model.providerId)
@@ -705,10 +707,12 @@ class DataSync {
   // 执行一次数据同步
   async syncData(options?: SyncOptions) {
     if (this.isBuildPhase()) {
+      console.log(`${SYNC_LOG_TAG} skip_sync build_phase`)
       return this.getEmptySyncStatus()
     }
 
     if (this.isSyncing) {
+      console.log(`${SYNC_LOG_TAG} skip_sync already_running`)
       return this.getSyncStatus()
     }
 
@@ -716,6 +720,7 @@ class DataSync {
     const startedAt = await this.markSyncStarted(mode)
 
     try {
+      console.log(`${SYNC_LOG_TAG} start mode=${mode} full=${options?.fullSync === true} manual=${options?.manual === true}`)
       await this.syncRemoteMetadata()
 
       const fullSync = options?.fullSync === true
@@ -726,7 +731,7 @@ class DataSync {
         ? this.buildDailyWindows(dayjs('2026-01-01 00:00:00'), dayjs())
         : [this.buildIncrementalWindow(lastCompletedSync, manual)]
 
-      console.log(`${SYNC_LOG_TAG} start windows=${windows.length} mode=${mode}`)
+      console.log(`${SYNC_LOG_TAG} windows=${windows.length}`)
       await this.markSyncPhase('fetching')
 
       const failedPages: SyncFailedPage[] = []
@@ -759,15 +764,15 @@ class DataSync {
 
       if (failedPages.length > 0) {
         await this.markSyncPartial(completedAt, duration, totalSynced, failedPages)
-        console.warn(`${SYNC_LOG_TAG} partial items=${totalSynced} failed_pages=${failedPages.map((item) => item.page).join(',')}`)
+        console.warn(`${SYNC_LOG_TAG} partial_success items=${totalSynced} failed_pages=${failedPages.map((item) => item.page).join(',')}`)
       } else {
         await this.markSyncCompleted(completedAt, duration, totalSynced)
-        console.log(`${SYNC_LOG_TAG} done items=${totalSynced} duration_ms=${duration}`)
+        console.log(`${SYNC_LOG_TAG} success items=${totalSynced} duration_ms=${duration}`)
       }
 
       return this.getSyncStatus()
     } catch (error) {
-      console.error(`${SYNC_LOG_TAG} fail`, error)
+      console.error(`${SYNC_LOG_TAG} failure`, error)
       await this.markSyncFailed(error)
       return this.getSyncStatus()
     }
@@ -789,7 +794,7 @@ class DataSync {
   }
 
   private async processSyncedRange(syncWindow: SyncWindow) {
-    console.log(`🧮 开始后台处理: ${syncWindow.start} - ${syncWindow.end}`)
+    console.log(`${SYNC_LOG_TAG} processing ${syncWindow.start} -> ${syncWindow.end}`)
 
     await this.ensureMetadataTable()
     await this.markSyncPhase('processing')
@@ -797,7 +802,7 @@ class DataSync {
     await this.aggregateData(syncWindow)
     await this.updateProcessingTime(syncWindow.end)
 
-    console.log('✅ 后台处理完成')
+    console.log(`${SYNC_LOG_TAG} processing_done`)
   }
 
   private async backfillCosts(syncWindow: SyncWindow) {
